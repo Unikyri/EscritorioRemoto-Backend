@@ -18,6 +18,7 @@ CREATE TABLE users (
 -- client_pcs Table
 CREATE TABLE client_pcs (
     pc_id VARCHAR(36) PRIMARY KEY,
+    identifier VARCHAR(50) NOT NULL,
     ip VARCHAR(255) NOT NULL,
     connection_status ENUM('ONLINE', 'OFFLINE', 'CONNECTING') DEFAULT 'OFFLINE',
     registered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -25,7 +26,8 @@ CREATE TABLE client_pcs (
     last_seen_at TIMESTAMP NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    FOREIGN KEY (owner_user_id) REFERENCES users(user_id) ON DELETE CASCADE
+    FOREIGN KEY (owner_user_id) REFERENCES users(user_id) ON DELETE CASCADE,
+    UNIQUE KEY unique_identifier_per_owner (identifier, owner_user_id)
 );
 
 -- remote_sessions Table  

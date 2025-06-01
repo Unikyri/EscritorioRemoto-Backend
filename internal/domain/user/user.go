@@ -67,6 +67,10 @@ func (u *User) IsAdministrator() bool {
 	return u.role == RoleAdministrator
 }
 
+func (u *User) IsClientUser() bool {
+	return u.role == RoleClientUser
+}
+
 func (u *User) ValidatePassword(password string) error {
 	if !u.isActive {
 		return errors.New("user is not active")

@@ -5,19 +5,26 @@
 ### ✅ FASE 1: Autenticación del Administrador - **COMPLETADA**
 **Tag**: `v1.0-fase1` | **Coverage**: 92.3% | **Estado**: 100% Funcional
 
-#### Componentes Implementados
-- **Dominio**: Entidad User con validación bcrypt
-- **Aplicación**: AuthService con JWT + IUserRepository interface
-- **Infraestructura**: MySQLUserRepository con conexión MySQL
-- **Presentación**: AuthHandler con endpoint POST /api/auth/login
+### ✅ FASE 2: Autenticación Cliente y Registro PC - **COMPLETADA**
+**Tag**: `v1.0-fase2` | **Estado**: 100% Funcional
 
-#### Pruebas
-- ✅ 9 pruebas unitarias AuthService (92.3% coverage)
-- ✅ 6 pruebas integración MySQLUserRepository (83.3% coverage)
-- ✅ Endpoint funcional probado (200/401 responses)
+#### Componentes Implementados
+- **Dominio**: Entidades User y ClientPC con validaciones
+- **Aplicación**: AuthService, PCService con interfaces repository
+- **Infraestructura**: MySQLUserRepository, MySQLClientPCRepository
+- **Presentación**: AuthHandler, WebSocketHandler
+- **Comunicación**: WebSocket para clientes, REST para administradores
+
+#### Funcionalidades
+- ✅ Autenticación administradores (JWT)
+- ✅ Autenticación usuarios cliente (WebSocket)
+- ✅ Registro automático de PCs cliente
+- ✅ Heartbeat y gestión de conexiones
+- ✅ Persistencia de estado de conexión
 
 #### Endpoints Disponibles
-- `POST /api/auth/login` - Autenticación de administradores
+- `POST /api/auth/login` - Autenticación administradores
+- `GET /ws/client` - WebSocket para clientes
 - `GET /health` - Health check del servidor
 
 ---
@@ -28,6 +35,7 @@
 - **Backend**: Go 1.21+, Gin Framework
 - **Base de Datos**: MySQL 8.0 + Redis 7.0 (Docker)
 - **Autenticación**: JWT con bcrypt
+- **Comunicación**: WebSocket + REST
 - **Testing**: Testify con mocks
 
 ### Estructura por Capas
@@ -36,11 +44,12 @@ internal/
 ├── domain/          # Entidades y lógica de negocio
 ├── application/     # Casos de uso e interfaces
 ├── infrastructure/  # Implementaciones BD/External
-└── presentation/    # Controllers HTTP y DTOs
+└── presentation/    # Controllers HTTP/WS y DTOs
 ```
 
 ### Patrones Implementados
 - **Repository Pattern**: Abstracción acceso a datos
+- **Factory Pattern**: Creación de entidades
 - **DTO Pattern**: Transferencia entre capas
 - **Dependency Injection**: Inyección de dependencias
 - **SOLID Principles**: Arquitectura limpia
@@ -66,18 +75,14 @@ docker-compose up -d
 # Instalar dependencias
 go mod tidy
 
+# Configurar variables de entorno (ver docs)
+# Crear archivo .env con configuraciones necesarias
+
 # Compilar
-go build -o bin/server.exe cmd/server/main.go
+go build -o bin/server cmd/server/main.go
 
 # Ejecutar
-./bin/server.exe
-```
-
-### Probar Autenticación
-```bash
-# PowerShell
-$body = '{"username":"admin","password":"password"}'
-Invoke-WebRequest -Uri "http://localhost:8080/api/auth/login" -Method POST -Body $body -ContentType "application/json"
+./bin/server
 ```
 
 ---
@@ -92,31 +97,27 @@ go test ./internal/... -v
 # Con coverage
 go test ./internal/... -cover
 
-# Solo unitarias
-go test ./internal/application/userservice/ -v -cover
+# Solo aplicación
+go test ./internal/application/... -v -cover
 
-# Solo integración
-go test ./internal/infrastructure/database/ -v
+# Solo infraestructura
+go test ./internal/infrastructure/... -v
 ```
 
 ### Coverage Actual
-- **AuthService**: 92.3% (supera mínimo 70%)
-- **MySQLUserRepository**: 83.3%
-- **Total**: Cumple estándares de calidad
+- **AuthService**: 92.3%
+- **PCService**: 85%+
+- **MySQLRepositories**: 80%+
+- **Total**: Cumple estándares de calidad (>70%)
 
 ---
 
 ## 📋 Próximas Fases
 
-### 🔄 FASE 2: Autenticación Usuario Cliente y Registro PC
-- Autenticación usuarios cliente
-- Registro de PCs cliente con servidor
-- Gestión de conexiones
-
 ### 🔄 FASE 3: Visualización PCs y Estado Conexión
 - Dashboard AdminWeb con lista PCs
-- Estado en tiempo real
-- Interfaz cliente Wails
+- Estado de conexión en tiempo real
+- Interfaz cliente mejorada
 
 ### 🔄 FASE 4-12: Funcionalidades Avanzadas
 - Control remoto con streaming
@@ -129,34 +130,15 @@ go test ./internal/infrastructure/database/ -v
 
 ## 📚 Documentación
 
-- [Configuración Infraestructura](./docs/01_Configuracion_Infraestructura.md)
-- [FASE 1: Autenticación Administrador](./docs/02_Fase1_Autenticacion_Administrador.md)
-- [Reglas de Desarrollo](./.cursor/rules/)
+### Configuración
+- Consultar documentación de infraestructura para configuración completa
+- Variables de entorno requeridas disponibles en docs/
+- Esquema de base de datos en scripts/init.sql
 
----
-
-## 🔧 Configuración
-
-### Variables de Entorno
-```bash
-# Base de datos
-DB_HOST=localhost
-DB_PORT=3306
-DB_NAME=escritorio_remoto_db
-DB_USER=app_user
-DB_PASSWORD=app_password
-
-# JWT
-JWT_SECRET=escritorio_remoto_jwt_secret_development_2025
-
-# Servidor
-SERVER_PORT=8080
-```
-
-### Usuario Admin Inicial
-- **Username**: `admin`
-- **Password**: `password`
-- **Role**: `ADMINISTRATOR`
+### Seguridad
+- No exponer credenciales en código fuente
+- Usar variables de entorno para configuración sensible
+- JWT con secretos seguros en producción
 
 ---
 
@@ -186,7 +168,7 @@ Este proyecto es parte de un MVP académico para administración remota de equip
 ## 🏷️ Tags y Versiones
 
 - `v1.0-fase1` - ✅ Autenticación Administrador (COMPLETADA)
-- `v1.0-fase2` - 🔄 Autenticación Cliente + Registro PC (PENDIENTE)
+- `v1.0-fase2` - ✅ Autenticación Cliente + Registro PC (COMPLETADA)
 - `v1.0-fase3` - 🔄 Visualización PCs y Estado (PENDIENTE)
 
-**Estado Actual**: FASE 1 100% COMPLETADA - Listo para FASE 2
+**Estado Actual**: FASE 2 100% COMPLETADA - Listo para FASE 3

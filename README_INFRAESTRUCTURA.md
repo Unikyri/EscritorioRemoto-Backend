@@ -3,7 +3,7 @@
 ## 🚀 Estado Actual
 **✅ INFRAESTRUCTURA COMPLETAMENTE CONFIGURADA**
 
-La infraestructura del proyecto está lista para el desarrollo de las fases. Todos los componentes han sido probados y funcionan correctamente.
+La infraestructura del proyecto está lista para el desarrollo. Todos los componentes han sido probados y funcionan correctamente.
 
 ## 📋 Componentes Configurados
 
@@ -39,44 +39,38 @@ docker-compose up -d
 docker-compose ps
 ```
 
-### 2. Probar Conectividad
+### 2. Configurar Variables de Entorno
 ```bash
-# Probar MySQL (incluye verificación del usuario admin)
+# Crear archivo .env con las variables necesarias
+# Ver documentación de configuración para detalles
+```
+
+### 3. Probar Conectividad
+```bash
+# Probar MySQL
 go run scripts/test_mysql.go
 
 # Probar Redis
 go run scripts/test_redis.go
 ```
 
-### 3. Compilar y Ejecutar
+### 4. Compilar y Ejecutar
 ```bash
 # Compilar proyecto
-go build -o bin/server.exe cmd/server/main.go
+go build -o bin/server cmd/server/main.go
 
 # Ejecutar servidor
-./bin/server.exe
+./bin/server
 ```
-
-## 🔑 Usuario Administrador Inicial
-
-El sistema incluye un usuario administrador predefinido:
-
-- **Username**: `admin`
-- **Password**: `password`
-- **Role**: `ADMINISTRATOR`
-- **ID**: `admin-000-000-000-000000000001`
-
-> ⚠️ **Importante**: Cambiar la contraseña en producción
 
 ## 🗄️ Base de Datos
 
-### Conexión MySQL
-- **Host**: localhost:3306
-- **Database**: escritorio_remoto_db
-- **User**: app_user
-- **Password**: app_password
+### Configuración MySQL
+- Host y puerto configurable vía variables de entorno
+- Base de datos: escritorio_remoto_db
+- Usuario y contraseña configurables (NO exponer en código)
 
-### Tablas Creadas
+### Tablas Implementadas
 - `users` - Usuarios del sistema
 - `client_pcs` - PCs cliente registrados
 - `remote_sessions` - Sesiones de control remoto
@@ -84,16 +78,21 @@ El sistema incluye un usuario administrador predefinido:
 - `file_transfers` - Transferencias de archivos
 - `action_logs` - Logs de auditoría
 
+### Usuarios Iniciales
+- Sistema incluye usuarios de prueba
+- Credenciales configurables via variables de entorno
+- **Importante**: Cambiar credenciales en producción
+
 ## 📦 Cache Redis
-- **Host**: localhost:6379
-- **Database**: 0
-- **Password**: (sin password en desarrollo)
+- Host y puerto configurables
+- Base de datos: 0 (desarrollo)
+- Configuración de seguridad para producción
 
 ## 🧪 Resultados de Pruebas
 
 ### ✅ MySQL
 - Conexión establecida correctamente
-- Usuario administrador verificado
+- Usuarios verificados
 - Schema implementado según especificaciones
 - Persistencia de datos confirmada
 - Sistema de logs funcionando
@@ -126,13 +125,11 @@ github.com/gin-gonic/gin         // Framework HTTP
 github.com/stretchr/testify      // Testing y mocks
 ```
 
-## 🔄 Próximos Pasos
+## 🔄 Estado de Fases
 
-La infraestructura está lista para iniciar el desarrollo por fases:
-
-1. **FASE 1**: Autenticación del Administrador (Backend y AdminWeb)
-2. **FASE 2**: Autenticación Usuario Cliente y Registro del PC
-3. **FASE 3**: Visualización de PCs Cliente y Estado
+1. **FASE 1**: ✅ Autenticación del Administrador (COMPLETADA)
+2. **FASE 2**: ✅ Autenticación Usuario Cliente y Registro PC (COMPLETADA)
+3. **FASE 3**: 🔄 Visualización de PCs Cliente y Estado (EN PROGRESO)
 4. ... (continuar según metodología definida)
 
 ## 🛠️ Comandos de Desarrollo
@@ -152,8 +149,21 @@ docker-compose down -v
 docker-compose up -d --build
 ```
 
+## 🔒 Seguridad
+
+### Variables de Entorno Requeridas
+- Consultar documentación específica
+- No incluir credenciales en código fuente
+- Usar configuración separada para desarrollo/producción
+
+### Consideraciones de Producción
+- Cambiar todas las credenciales por defecto
+- Usar conexiones SSL/TLS
+- Configurar firewall y acceso restringido
+- Implementar rotación de secretos
+
 ---
 
-**📅 Configurado**: 06 de Enero 2025  
-**🎯 Estado**: ✅ COMPLETADO  
-**🚀 Listo para**: FASE 1 - Autenticación del Administrador 
+**📅 Última actualización**: Enero 2025  
+**🎯 Estado**: ✅ COMPLETADO (FASE 1 y 2)  
+**🚀 Listo para**: FASE 3 - Visualización de PCs 

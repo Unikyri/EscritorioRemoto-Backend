@@ -1,0 +1,166 @@
+package pcservice
+
+import (
+	"context"
+	"errors"
+	"fmt"
+
+	"github.com/unikyri/escritorio-remoto-backend/internal/application/interfaces"
+	"github.com/unikyri/escritorio-remoto-backend/internal/domain/clientpc"
+)
+
+// IPCService defines the interface for PC-related business operations
+type IPCService interface {
+	RegisterPC(ctx context.Context, ownerUserID, pcIdentifier, ip string) (*clientpc.ClientPC, error)
+	GetPCByID(ctx context.Context, pcID string) (*clientpc.ClientPC, error)
+	GetPCsByOwner(ctx context.Context, ownerUserID string) ([]*clientpc.ClientPC, error)
+	GetOnlinePCsByOwner(ctx context.Context, ownerUserID string) ([]*clientpc.ClientPC, error)
+	UpdatePCConnectionStatus(ctx context.Context, pcID string, status clientpc.PCConnectionStatus) error
+	UpdatePCLastSeen(ctx context.Context, pcID string) error
+}
+
+// PCService implements the business logic for PC operations
+type PCService struct {
+	pcRepository interfaces.IClientPCRepository
+	pcFactory    clientpc.IClientPCFactory
+}
+
+// NewPCService creates a new instance of PCService
+func NewPCService(pcRepository interfaces.IClientPCRepository, pcFactory clientpc.IClientPCFactory) IPCService {
+	return &PCService{
+		pcRepository: pcRepository,
+		pcFactory:    pcFactory,
+	}
+}
+
+// RegisterPC registers a new PC or updates an existing one for a specific user
+func (s *PCService) RegisterPC(ctx context.Context, ownerUserID, pcIdentifier, ip string) (*clientpc.ClientPC, error) {
+	// Validate input parameters
+	if ownerUserID == "" {
+		return nil, errors.New("owner user ID cannot be empty")
+	}
+	if pcIdentifier == "" {
+		return nil, errors.New("PC identifier cannot be empty")
+	}
+	if ip == "" {
+		return nil, errors.New("IP address cannot be empty")
+	}
+
+	// Check if PC is already registered for this user
+	existingPC, err := s.pcRepository.FindByIdentifierAndOwner(ctx, pcIdentifier, ownerUserID)
+	if err != nil {
+		return nil, fmt.Errorf("error checking existing PC: %w", err)
+	}
+
+	// If PC already exists, update its status and last seen
+	if existingPC != nil {
+		existingPC.SetOnline()
+		// Update IP if it has changed
+		if existingPC.IP != ip {
+			// Note: We might need to add an UpdateIP method to the domain entity
+			// For now, we'll keep the existing IP
+		}
+
+		err = s.pcRepository.Save(ctx, existingPC)
+		if err != nil {
+			return nil, fmt.Errorf("error updating existing PC: %w", err)
+		}
+
+		return existingPC, nil
+	}
+
+	// Create new PC if it doesn't exist
+	newPC, err := s.pcFactory.CreateClientPC(pcIdentifier, ip, ownerUserID)
+	if err != nil {
+		return nil, fmt.Errorf("error creating new PC: %w", err)
+	}
+
+	// Mark PC as online since it's being registered
+	newPC.SetOnline()
+
+	// Save the new PC
+	err = s.pcRepository.Save(ctx, newPC)
+	if err != nil {
+		return nil, fmt.Errorf("error saving new PC: %w", err)
+	}
+
+	return newPC, nil
+}
+
+// GetPCByID retrieves a PC by its ID
+func (s *PCService) GetPCByID(ctx context.Context, pcID string) (*clientpc.ClientPC, error) {
+	if pcID == "" {
+		return nil, errors.New("PC ID cannot be empty")
+	}
+
+	pc, err := s.pcRepository.FindByID(ctx, pcID)
+	if err != nil {
+		return nil, fmt.Errorf("error retrieving PC by ID: %w", err)
+	}
+
+	if pc == nil {
+		return nil, errors.New("PC not found")
+	}
+
+	return pc, nil
+}
+
+// GetPCsByOwner retrieves all PCs belonging to a specific owner
+func (s *PCService) GetPCsByOwner(ctx context.Context, ownerUserID string) ([]*clientpc.ClientPC, error) {
+	if ownerUserID == "" {
+		return nil, errors.New("owner user ID cannot be empty")
+	}
+
+	pcs, err := s.pcRepository.FindByOwner(ctx, ownerUserID)
+	if err != nil {
+		return nil, fmt.Errorf("error retrieving PCs by owner: %w", err)
+	}
+
+	return pcs, nil
+}
+
+// GetOnlinePCsByOwner retrieves all online PCs belonging to a specific owner
+func (s *PCService) GetOnlinePCsByOwner(ctx context.Context, ownerUserID string) ([]*clientpc.ClientPC, error) {
+	if ownerUserID == "" {
+		return nil, errors.New("owner user ID cannot be empty")
+	}
+
+	pcs, err := s.pcRepository.FindOnlineByOwner(ctx, ownerUserID)
+	if err != nil {
+		return nil, fmt.Errorf("error retrieving online PCs by owner: %w", err)
+	}
+
+	return pcs, nil
+}
+
+// UpdatePCConnectionStatus updates the connection status of a PC
+func (s *PCService) UpdatePCConnectionStatus(ctx context.Context, pcID string, status clientpc.PCConnectionStatus) error {
+	if pcID == "" {
+		return errors.New("PC ID cannot be empty")
+	}
+
+	if !status.IsValid() {
+		return errors.New("invalid connection status")
+	}
+
+	err := s.pcRepository.UpdateConnectionStatus(ctx, pcID, status)
+	if err != nil {
+		return fmt.Errorf("error updating PC connection status: %w", err)
+	}
+
+	return nil
+}
+
+// UpdatePCLastSeen updates the last seen timestamp of a PC
+func (s *PCService) UpdatePCLastSeen(ctx context.Context, pcID string) error {
+	if pcID == "" {
+		return errors.New("PC ID cannot be empty")
+	}
+
+	err := s.pcRepository.UpdateLastSeen(ctx, pcID)
+	if err != nil {
+		return fmt.Errorf("error updating PC last seen: %w", err)
+	}
+
+	return nil
+}

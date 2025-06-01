@@ -62,6 +62,43 @@ func (s *AuthService) AuthenticateAdmin(username, password string) (string, *use
 	return token, foundUser, nil
 }
 
+// AuthenticateClient autentica un usuario cliente y retorna un token JWT
+func (s *AuthService) AuthenticateClient(username, password string) (string, *user.User, error) {
+	// Buscar usuario por nombre de usuario
+	foundUser, err := s.userRepository.FindByUsername(username)
+	if err != nil {
+		return "", nil, errors.New("invalid credentials")
+	}
+
+	// Verificar que el usuario existe
+	if foundUser == nil {
+		return "", nil, errors.New("invalid credentials")
+	}
+
+	// Verificar que es un usuario cliente
+	if !foundUser.IsClientUser() {
+		return "", nil, errors.New("user is not a client user")
+	}
+
+	// Verificar que está activo
+	if !foundUser.IsActive() {
+		return "", nil, errors.New("user account is not active")
+	}
+
+	// Validar contraseña
+	if err := foundUser.ValidatePassword(password); err != nil {
+		return "", nil, errors.New("invalid credentials")
+	}
+
+	// Generar token JWT
+	token, err := s.generateJWT(foundUser)
+	if err != nil {
+		return "", nil, errors.New("failed to generate authentication token")
+	}
+
+	return token, foundUser, nil
+}
+
 // ValidateToken valida un token JWT y retorna los claims
 func (s *AuthService) ValidateToken(tokenString string) (*JWTClaims, error) {
 	token, err := jwt.ParseWithClaims(tokenString, &JWTClaims{}, func(token *jwt.Token) (interface{}, error) {
