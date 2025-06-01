@@ -175,7 +175,7 @@ generar el informe.
 El backend sigue una arquitectura por capas. Los modelos de datos relevantes se encuentran en:
 
 * **Capa de Dominio:** Contiene las entidades, agregados, objetos de valor y servicios de dominio.
-    classDiagram 
+    ``` classDiagram 
     direction LR 
  
     class User { 
@@ -247,6 +247,7 @@ ActionLog "0..*" -- "0..1" RemoteSession : DescribesActionOn
 ActionLog "0..*" -- "0..1" FileTransfer : DescribesActionOn 
 ActionLog "0..*" -- "0..1" ClientPC : DescribesActionOn 
 ActionLog "0..*" -- "0..1" User : DescribesActionOnUser
+```
 
 * **Capa de Aplicación:** Contiene los servicios de aplicación (casos de uso) y las interfaces de los repositorios.
     * Ver Diagrama de Clases - Capa de Aplicación.
