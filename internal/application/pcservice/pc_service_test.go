@@ -299,3 +299,153 @@ func TestPCService_UpdatePCConnectionStatus_InvalidStatus(t *testing.T) {
 	// Repository should not be called
 	mockRepo.AssertNotCalled(t, "UpdateConnectionStatus")
 }
+
+func TestPCService_GetAllClientPCs(t *testing.T) {
+	t.Run("Successfully retrieve all client PCs", func(t *testing.T) {
+		// Arrange
+		mockRepo := new(MockClientPCRepository)
+		mockFactory := new(MockClientPCFactory)
+		service := NewPCService(mockRepo, mockFactory)
+
+		ctx := context.Background()
+
+		// Crear algunos PCs de prueba
+		pc1, _ := clientpc.NewClientPC("550e8400-e29b-41d4-a716-446655440001", "PC-Test-1", "192.168.1.100", "550e8400-e29b-41d4-a716-446655440000")
+		pc1.SetOnline()
+		pc2, _ := clientpc.NewClientPC("550e8400-e29b-41d4-a716-446655440002", "PC-Test-2", "192.168.1.101", "550e8400-e29b-41d4-a716-446655440003")
+		pc2.SetOffline()
+		pc3, _ := clientpc.NewClientPC("550e8400-e29b-41d4-a716-446655440004", "PC-Test-3", "192.168.1.102", "550e8400-e29b-41d4-a716-446655440000")
+		pc3.SetOnline()
+
+		expectedPCs := []*clientpc.ClientPC{pc1, pc2, pc3}
+
+		// Setup mock expectations
+		mockRepo.On("FindAll", ctx, 0, 0).Return(expectedPCs, nil)
+
+		// Act
+		result, err := service.GetAllClientPCs(ctx)
+
+		// Assert
+		assert.NoError(t, err)
+		assert.NotNil(t, result)
+		assert.Len(t, result, 3)
+		assert.Equal(t, expectedPCs, result)
+		mockRepo.AssertExpectations(t)
+	})
+
+	t.Run("Repository error", func(t *testing.T) {
+		// Arrange
+		mockRepo := new(MockClientPCRepository)
+		mockFactory := new(MockClientPCFactory)
+		service := NewPCService(mockRepo, mockFactory)
+
+		ctx := context.Background()
+		expectedError := errors.New("repository error")
+
+		// Setup mock expectations
+		mockRepo.On("FindAll", ctx, 0, 0).Return(([]*clientpc.ClientPC)(nil), expectedError)
+
+		// Act
+		result, err := service.GetAllClientPCs(ctx)
+
+		// Assert
+		assert.Error(t, err)
+		assert.Nil(t, result)
+		assert.Contains(t, err.Error(), "error retrieving all client PCs")
+		mockRepo.AssertExpectations(t)
+	})
+}
+
+func TestPCService_GetOnlineClientPCs(t *testing.T) {
+	t.Run("Successfully retrieve only online client PCs", func(t *testing.T) {
+		// Arrange
+		mockRepo := new(MockClientPCRepository)
+		mockFactory := new(MockClientPCFactory)
+		service := NewPCService(mockRepo, mockFactory)
+
+		ctx := context.Background()
+
+		// Crear algunos PCs de prueba
+		pc1, _ := clientpc.NewClientPC("550e8400-e29b-41d4-a716-446655440001", "PC-Online-1", "192.168.1.100", "550e8400-e29b-41d4-a716-446655440000")
+		pc1.SetOnline()
+		pc2, _ := clientpc.NewClientPC("550e8400-e29b-41d4-a716-446655440002", "PC-Offline", "192.168.1.101", "550e8400-e29b-41d4-a716-446655440003")
+		pc2.SetOffline()
+		pc3, _ := clientpc.NewClientPC("550e8400-e29b-41d4-a716-446655440004", "PC-Online-2", "192.168.1.102", "550e8400-e29b-41d4-a716-446655440000")
+		pc3.SetOnline()
+
+		allPCs := []*clientpc.ClientPC{pc1, pc2, pc3}
+
+		// Setup mock expectations
+		mockRepo.On("FindAll", ctx, 0, 0).Return(allPCs, nil)
+
+		// Act
+		result, err := service.GetOnlineClientPCs(ctx)
+
+		// Assert
+		assert.NoError(t, err)
+		assert.NotNil(t, result)
+		assert.Len(t, result, 2) // Solo 2 están online
+
+		// Verificar que todos los PCs devueltos están online
+		for _, pc := range result {
+			assert.True(t, pc.IsOnline())
+		}
+
+		// Verificar que tenemos los PCs correctos
+		assert.Equal(t, "PC-Online-1", result[0].Identifier)
+		assert.Equal(t, "PC-Online-2", result[1].Identifier)
+
+		mockRepo.AssertExpectations(t)
+	})
+
+	t.Run("No online PCs available", func(t *testing.T) {
+		// Arrange
+		mockRepo := new(MockClientPCRepository)
+		mockFactory := new(MockClientPCFactory)
+		service := NewPCService(mockRepo, mockFactory)
+
+		ctx := context.Background()
+
+		// Crear algunos PCs offline
+		pc1, _ := clientpc.NewClientPC("550e8400-e29b-41d4-a716-446655440001", "PC-Offline-1", "192.168.1.100", "550e8400-e29b-41d4-a716-446655440000")
+		pc1.SetOffline()
+		pc2, _ := clientpc.NewClientPC("550e8400-e29b-41d4-a716-446655440002", "PC-Offline-2", "192.168.1.101", "550e8400-e29b-41d4-a716-446655440003")
+		pc2.SetOffline()
+
+		allPCs := []*clientpc.ClientPC{pc1, pc2}
+
+		// Setup mock expectations
+		mockRepo.On("FindAll", ctx, 0, 0).Return(allPCs, nil)
+
+		// Act
+		result, err := service.GetOnlineClientPCs(ctx)
+
+		// Assert
+		assert.NoError(t, err)
+		assert.NotNil(t, result) // El resultado debe ser un slice vacío, no nil
+		assert.Len(t, result, 0) // No hay PCs online
+		mockRepo.AssertExpectations(t)
+	})
+
+	t.Run("Repository error", func(t *testing.T) {
+		// Arrange
+		mockRepo := new(MockClientPCRepository)
+		mockFactory := new(MockClientPCFactory)
+		service := NewPCService(mockRepo, mockFactory)
+
+		ctx := context.Background()
+		expectedError := errors.New("repository error")
+
+		// Setup mock expectations
+		mockRepo.On("FindAll", ctx, 0, 0).Return(([]*clientpc.ClientPC)(nil), expectedError)
+
+		// Act
+		result, err := service.GetOnlineClientPCs(ctx)
+
+		// Assert
+		assert.Error(t, err)
+		assert.Nil(t, result)
+		assert.Contains(t, err.Error(), "error retrieving PCs")
+		mockRepo.AssertExpectations(t)
+	})
+}

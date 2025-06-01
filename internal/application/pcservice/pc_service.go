@@ -17,6 +17,8 @@ type IPCService interface {
 	GetOnlinePCsByOwner(ctx context.Context, ownerUserID string) ([]*clientpc.ClientPC, error)
 	UpdatePCConnectionStatus(ctx context.Context, pcID string, status clientpc.PCConnectionStatus) error
 	UpdatePCLastSeen(ctx context.Context, pcID string) error
+	GetAllClientPCs(ctx context.Context) ([]*clientpc.ClientPC, error)
+	GetOnlineClientPCs(ctx context.Context) ([]*clientpc.ClientPC, error)
 }
 
 // PCService implements the business logic for PC operations
@@ -163,4 +165,33 @@ func (s *PCService) UpdatePCLastSeen(ctx context.Context, pcID string) error {
 	}
 
 	return nil
+}
+
+// GetAllClientPCs retrieves all client PCs in the system (for admin dashboard)
+func (s *PCService) GetAllClientPCs(ctx context.Context) ([]*clientpc.ClientPC, error) {
+	pcs, err := s.pcRepository.FindAll(ctx, 0, 0) // 0 means no limit
+	if err != nil {
+		return nil, fmt.Errorf("error retrieving all client PCs: %w", err)
+	}
+
+	return pcs, nil
+}
+
+// GetOnlineClientPCs retrieves all currently online client PCs (for admin dashboard)
+func (s *PCService) GetOnlineClientPCs(ctx context.Context) ([]*clientpc.ClientPC, error) {
+	// Primero obtenemos todos los PCs
+	allPCs, err := s.GetAllClientPCs(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("error retrieving PCs: %w", err)
+	}
+
+	// Filtrar solo los que están online
+	onlinePCs := make([]*clientpc.ClientPC, 0) // Inicializar slice vacío en lugar de nil
+	for _, pc := range allPCs {
+		if pc.IsOnline() {
+			onlinePCs = append(onlinePCs, pc)
+		}
+	}
+
+	return onlinePCs, nil
 }

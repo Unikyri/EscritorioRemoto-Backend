@@ -91,15 +91,20 @@ func (h *WebSocketHandler) HandleWebSocket(c *gin.Context) {
 		delete(h.connections, connectionID)
 		if clientConn.PCID != "" {
 			delete(h.pcConnections, clientConn.PCID)
-			// Mark PC as offline
+			// Marcar PC como offline cuando se cierra la conexión
 			if clientConn.IsAuth {
 				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 				defer cancel()
-				h.pcService.UpdatePCConnectionStatus(ctx, clientConn.PCID, clientpc.PCConnectionStatusOffline)
+				err := h.pcService.UpdatePCConnectionStatus(ctx, clientConn.PCID, clientpc.PCConnectionStatusOffline)
+				if err != nil {
+					log.Printf("Error updating PC status to offline: %v", err)
+				} else {
+					log.Printf("PC marked as offline: %s (%s)", clientConn.PCID, clientConn.Username)
+				}
 			}
 		}
 		h.mutex.Unlock()
-		log.Printf("Client disconnected: %s", connectionID)
+		log.Printf("Client disconnected: %s (Username: %s, PCID: %s)", connectionID, clientConn.Username, clientConn.PCID)
 	}()
 
 	log.Printf("New WebSocket connection: %s from %s", connectionID, clientIP)
@@ -228,11 +233,20 @@ func (h *WebSocketHandler) handleHeartbeat(conn *websocket.Conn, clientConn *Cli
 		return
 	}
 
-	// Update last seen if PC is registered
+	// Update last seen and ensure PC is online if PC is registered
 	if clientConn.PCID != "" && clientConn.IsAuth {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		h.pcService.UpdatePCLastSeen(ctx, clientConn.PCID)
+
+		// Actualizar último visto
+		if err := h.pcService.UpdatePCLastSeen(ctx, clientConn.PCID); err != nil {
+			log.Printf("Error updating PC last seen: %v", err)
+		}
+
+		// Asegurar que el PC esté marcado como online
+		if err := h.pcService.UpdatePCConnectionStatus(ctx, clientConn.PCID, clientpc.PCConnectionStatusOnline); err != nil {
+			log.Printf("Error updating PC status to online: %v", err)
+		}
 	}
 
 	// Send heartbeat response
