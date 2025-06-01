@@ -246,8 +246,7 @@ about
 ActionLog "0..*" -- "0..1" RemoteSession : DescribesActionOn 
 ActionLog "0..*" -- "0..1" FileTransfer : DescribesActionOn 
 ActionLog "0..*" -- "0..1" ClientPC : DescribesActionOn 
-ActionLog "0..*" -- "0..1" User : DescribesActionOnUser
-```
+ActionLog "0..*" -- "0..1" User : DescribesActionOnUser ```
 
 * **Capa de Aplicación:** Contiene los servicios de aplicación (casos de uso) y las interfaces de los repositorios.
     * Ver Diagrama de Clases - Capa de Aplicación.
