@@ -1,0 +1,39 @@
+version: '3.8'
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: escritorio_remoto_mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpassword
+      MYSQL_DATABASE: escritorio_remoto_db
+      MYSQL_USER: app_user
+      MYSQL_PASSWORD: app_password
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./scripts/init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - escritorio_remoto_network
+    restart: unless-stopped
+
+  redis:
+    image: redis:7.0-alpine
+    container_name: escritorio_remoto_redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - escritorio_remoto_network
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+
+volumes:
+  mysql_data:
+  redis_data:
+
+networks:
+  escritorio_remoto_network:
+    driver: bridge 
