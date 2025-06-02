@@ -163,7 +163,9 @@ func (h *AdminWebSocketHandler) BroadcastPCConnected(pcID, identifier, ownerUser
 			"identifier":  identifier,
 			"ownerUserId": ownerUserID,
 			"ip":          ip,
+			"status":      "ONLINE",
 			"timestamp":   time.Now().Unix(),
+			"event":       "connection",
 		},
 	}
 
@@ -179,7 +181,9 @@ func (h *AdminWebSocketHandler) BroadcastPCDisconnected(pcID, identifier, ownerU
 			"pcId":        pcID,
 			"identifier":  identifier,
 			"ownerUserId": ownerUserID,
+			"status":      "OFFLINE",
 			"timestamp":   time.Now().Unix(),
+			"event":       "disconnection",
 		},
 	}
 
@@ -196,7 +200,9 @@ func (h *AdminWebSocketHandler) BroadcastPCRegistered(pcID, identifier, ownerUse
 			"identifier":  identifier,
 			"ownerUserId": ownerUserID,
 			"ip":          ip,
+			"status":      "ONLINE",
 			"timestamp":   time.Now().Unix(),
+			"event":       "registration",
 		},
 	}
 
@@ -214,11 +220,27 @@ func (h *AdminWebSocketHandler) BroadcastPCStatusChanged(pcID, identifier, oldSt
 			"oldStatus":  oldStatus,
 			"newStatus":  newStatus,
 			"timestamp":  time.Now().Unix(),
+			"event":      "status_change",
 		},
 	}
 
 	h.broadcastToAllAdmins(notification)
 	log.Printf("Broadcasted PC status change: %s (%s) %s -> %s", identifier, pcID, oldStatus, newStatus)
+}
+
+// BroadcastPCListUpdate notifica que la lista de PCs debe actualizarse
+func (h *AdminWebSocketHandler) BroadcastPCListUpdate() {
+	notification := dto.WebSocketMessage{
+		Type: "pc_list_update",
+		Data: map[string]interface{}{
+			"timestamp": time.Now().Unix(),
+			"event":     "list_refresh",
+			"message":   "PC list has been updated, please refresh",
+		},
+	}
+
+	h.broadcastToAllAdmins(notification)
+	log.Printf("Broadcasted PC list update notification")
 }
 
 // broadcastToAllAdmins envía un mensaje a todos los administradores conectados

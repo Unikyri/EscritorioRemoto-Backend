@@ -97,7 +97,18 @@ func (h *WebSocketHandler) HandleWebSocket(c *gin.Context) {
 			if clientConn.IsAuth {
 				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 				defer cancel()
-				err := h.pcService.UpdatePCConnectionStatus(ctx, clientConn.PCID, clientpc.PCConnectionStatusOffline)
+				
+				// Obtener información del PC antes de marcarlo como offline
+				currentPC, err := h.pcService.GetPCByID(ctx, clientConn.PCID)
+				var pcIdentifier string
+				if err == nil && currentPC != nil {
+					pcIdentifier = currentPC.Identifier
+				}
+				
+				// Obtener estado anterior del PC para notificación
+				oldStatus := "ONLINE"
+				
+				err = h.pcService.UpdatePCConnectionStatus(ctx, clientConn.PCID, clientpc.PCConnectionStatusOffline)
 				if err != nil {
 					log.Printf("Error updating PC status to offline: %v", err)
 				} else {
@@ -105,7 +116,11 @@ func (h *WebSocketHandler) HandleWebSocket(c *gin.Context) {
 
 					// Notificar a administradores sobre la desconexión del PC
 					if h.adminWSHandler != nil {
-						h.adminWSHandler.BroadcastPCDisconnected(clientConn.PCID, "", clientConn.UserID)
+						h.adminWSHandler.BroadcastPCDisconnected(clientConn.PCID, pcIdentifier, clientConn.UserID)
+						// Notificar cambio de estado específico
+						h.adminWSHandler.BroadcastPCStatusChanged(clientConn.PCID, pcIdentifier, oldStatus, "OFFLINE")
+						// Notificar actualización general de la lista
+						h.adminWSHandler.BroadcastPCListUpdate()
 					}
 				}
 			}
@@ -225,6 +240,14 @@ func (h *WebSocketHandler) handlePCRegistration(conn *websocket.Conn, clientConn
 	// Notificar a administradores sobre el registro del PC
 	if h.adminWSHandler != nil {
 		h.adminWSHandler.BroadcastPCRegistered(pc.PCID, pc.Identifier, pc.OwnerUserID, pc.IP)
+		
+		// También notificar que el PC está ahora ONLINE ya que se acaba de conectar
+		log.Printf("PC registered and online: %s (%s) for user %s", pc.Identifier, pc.PCID, clientConn.Username)
+		h.adminWSHandler.BroadcastPCConnected(pc.PCID, pc.Identifier, pc.OwnerUserID, pc.IP)
+		h.adminWSHandler.BroadcastPCStatusChanged(pc.PCID, pc.Identifier, "OFFLINE", "ONLINE")
+		
+		// Notificar actualización general de la lista
+		h.adminWSHandler.BroadcastPCListUpdate()
 	}
 
 	// Send success response
@@ -250,6 +273,13 @@ func (h *WebSocketHandler) handleHeartbeat(conn *websocket.Conn, clientConn *Cli
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 
+		// Primero verificar el estado actual del PC para detectar cambios
+		currentPC, err := h.pcService.GetPCByID(ctx, clientConn.PCID)
+		var wasOffline bool
+		if err == nil && currentPC != nil {
+			wasOffline = currentPC.ConnectionStatus == clientpc.PCConnectionStatusOffline
+		}
+
 		// Actualizar último visto
 		if err := h.pcService.UpdatePCLastSeen(ctx, clientConn.PCID); err != nil {
 			log.Printf("Error updating PC last seen: %v", err)
@@ -258,6 +288,22 @@ func (h *WebSocketHandler) handleHeartbeat(conn *websocket.Conn, clientConn *Cli
 		// Asegurar que el PC esté marcado como online
 		if err := h.pcService.UpdatePCConnectionStatus(ctx, clientConn.PCID, clientpc.PCConnectionStatusOnline); err != nil {
 			log.Printf("Error updating PC status to online: %v", err)
+		} else {
+			// Si el PC estaba offline y ahora está online, notificar el cambio
+			if wasOffline && h.adminWSHandler != nil {
+				log.Printf("PC reconnected: %s (%s)", clientConn.PCID, clientConn.Username)
+				
+				// Obtener información actualizada del PC para las notificaciones
+				updatedPC, err := h.pcService.GetPCByID(ctx, clientConn.PCID)
+				if err == nil && updatedPC != nil {
+					// Notificar reconexión del PC con información completa
+					h.adminWSHandler.BroadcastPCConnected(updatedPC.PCID, updatedPC.Identifier, updatedPC.OwnerUserID, updatedPC.IP)
+					// Notificar cambio de estado específico
+					h.adminWSHandler.BroadcastPCStatusChanged(updatedPC.PCID, updatedPC.Identifier, "OFFLINE", "ONLINE")
+					// Notificar actualización general de la lista
+					h.adminWSHandler.BroadcastPCListUpdate()
+				}
+			}
 		}
 	}
 
