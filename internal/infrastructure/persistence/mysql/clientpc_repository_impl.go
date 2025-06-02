@@ -6,31 +6,31 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/unikyri/escritorio-remoto-backend/internal/domain/clientpc/entities"
-	"github.com/unikyri/escritorio-remoto-backend/internal/domain/clientpc/repositories"
-	"github.com/unikyri/escritorio-remoto-backend/internal/domain/clientpc/valueobjects"
+	"github.com/unikyri/escritorio-remoto-backend/internal/application/interfaces"
+	"github.com/unikyri/escritorio-remoto-backend/internal/domain/clientpc"
 )
 
-// ClientPCRepositoryImpl implementa IClientPCRepository usando MySQL
+// ClientPCRepositoryImpl implementa el repositorio de ClientPC usando MySQL
 type ClientPCRepositoryImpl struct {
 	db *sql.DB
 }
 
 // NewClientPCRepository crea una nueva instancia del repositorio
-func NewClientPCRepository(db *sql.DB) repositories.IClientPCRepository {
+func NewClientPCRepository(db *sql.DB) interfaces.IClientPCRepository {
 	return &ClientPCRepositoryImpl{
 		db: db,
 	}
 }
 
 // Save guarda o actualiza un ClientPC
-func (r *ClientPCRepositoryImpl) Save(ctx context.Context, pc *entities.ClientPC) error {
+func (r *ClientPCRepositoryImpl) Save(ctx context.Context, pc *clientpc.ClientPC) error {
 	query := `
 		INSERT INTO client_pcs (
-			pc_id, ip, connection_status, registered_at, owner_user_id, 
+			pc_id, identifier, ip, connection_status, registered_at, owner_user_id, 
 			last_seen_at, created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON DUPLICATE KEY UPDATE
+			identifier = VALUES(identifier),
 			ip = VALUES(ip),
 			connection_status = VALUES(connection_status),
 			last_seen_at = VALUES(last_seen_at),
@@ -38,36 +38,37 @@ func (r *ClientPCRepositoryImpl) Save(ctx context.Context, pc *entities.ClientPC
 	`
 
 	_, err := r.db.ExecContext(ctx, query,
-		pc.ID().Value(),
-		pc.IP(),
-		pc.ConnectionStatus().Value(),
-		pc.RegisteredAt(),
-		pc.OwnerUserID(),
-		pc.LastSeenAt(),
-		pc.CreatedAt(),
-		pc.UpdatedAt(),
+		pc.PCID,
+		pc.Identifier,
+		pc.IP,
+		string(pc.ConnectionStatus),
+		pc.RegisteredAt,
+		pc.OwnerUserID,
+		pc.LastSeenAt,
+		pc.CreatedAt,
+		pc.UpdatedAt,
 	)
 
 	return err
 }
 
 // FindByID busca un ClientPC por su ID
-func (r *ClientPCRepositoryImpl) FindByID(ctx context.Context, pcID *valueobjects.PCID) (*entities.ClientPC, error) {
+func (r *ClientPCRepositoryImpl) FindByID(ctx context.Context, pcID string) (*clientpc.ClientPC, error) {
 	query := `
-		SELECT pc_id, ip, connection_status, registered_at, owner_user_id,
+		SELECT pc_id, identifier, ip, connection_status, registered_at, owner_user_id,
 			   last_seen_at, created_at, updated_at
 		FROM client_pcs 
 		WHERE pc_id = ?
 	`
 
-	row := r.db.QueryRowContext(ctx, query, pcID.Value())
+	row := r.db.QueryRowContext(ctx, query, pcID)
 
-	var pcIDStr, ip, connectionStatusStr, ownerUserID string
+	var pcIDStr, identifier, ip, connectionStatusStr, ownerUserID string
 	var registeredAt, createdAt, updatedAt time.Time
 	var lastSeenAt *time.Time
 
 	err := row.Scan(
-		&pcIDStr, &ip, &connectionStatusStr, &registeredAt,
+		&pcIDStr, &identifier, &ip, &connectionStatusStr, &registeredAt,
 		&ownerUserID, &lastSeenAt, &createdAt, &updatedAt,
 	)
 
@@ -78,30 +79,40 @@ func (r *ClientPCRepositoryImpl) FindByID(ctx context.Context, pcID *valueobject
 		return nil, err
 	}
 
-	return entities.ReconstructClientPCFromDB(
-		pcIDStr, "", ownerUserID, connectionStatusStr, ip,
-		registeredAt, createdAt, updatedAt, lastSeenAt,
-	)
+	// Construir la entidad simple
+	pc := &clientpc.ClientPC{
+		PCID:             pcIDStr,
+		Identifier:       identifier,
+		IP:               ip,
+		ConnectionStatus: clientpc.PCConnectionStatus(connectionStatusStr),
+		RegisteredAt:     registeredAt,
+		OwnerUserID:      ownerUserID,
+		LastSeenAt:       lastSeenAt,
+		CreatedAt:        createdAt,
+		UpdatedAt:        updatedAt,
+	}
+
+	return pc, nil
 }
 
 // FindByIdentifierAndOwner busca un PC por identificador y propietario
-func (r *ClientPCRepositoryImpl) FindByIdentifierAndOwner(ctx context.Context, identifier, ownerUserID string) (*entities.ClientPC, error) {
+func (r *ClientPCRepositoryImpl) FindByIdentifierAndOwner(ctx context.Context, identifier, ownerUserID string) (*clientpc.ClientPC, error) {
 	query := `
-		SELECT pc_id, ip, connection_status, registered_at, owner_user_id,
+		SELECT pc_id, identifier, ip, connection_status, registered_at, owner_user_id,
 			   last_seen_at, created_at, updated_at
 		FROM client_pcs 
-		WHERE owner_user_id = ?
+		WHERE identifier = ? AND owner_user_id = ?
 		LIMIT 1
 	`
 
-	row := r.db.QueryRowContext(ctx, query, ownerUserID)
+	row := r.db.QueryRowContext(ctx, query, identifier, ownerUserID)
 
-	var pcIDStr, ip, connectionStatusStr, ownerID string
+	var pcIDStr, identifierCol, ip, connectionStatusStr, ownerID string
 	var registeredAt, createdAt, updatedAt time.Time
 	var lastSeenAt *time.Time
 
 	err := row.Scan(
-		&pcIDStr, &ip, &connectionStatusStr, &registeredAt,
+		&pcIDStr, &identifierCol, &ip, &connectionStatusStr, &registeredAt,
 		&ownerID, &lastSeenAt, &createdAt, &updatedAt,
 	)
 
@@ -112,16 +123,26 @@ func (r *ClientPCRepositoryImpl) FindByIdentifierAndOwner(ctx context.Context, i
 		return nil, err
 	}
 
-	return entities.ReconstructClientPCFromDB(
-		pcIDStr, identifier, ownerID, connectionStatusStr, ip,
-		registeredAt, createdAt, updatedAt, lastSeenAt,
-	)
+	// Construir la entidad simple
+	pc := &clientpc.ClientPC{
+		PCID:             pcIDStr,
+		Identifier:       identifierCol,
+		IP:               ip,
+		ConnectionStatus: clientpc.PCConnectionStatus(connectionStatusStr),
+		RegisteredAt:     registeredAt,
+		OwnerUserID:      ownerID,
+		LastSeenAt:       lastSeenAt,
+		CreatedAt:        createdAt,
+		UpdatedAt:        updatedAt,
+	}
+
+	return pc, nil
 }
 
 // FindByOwner busca todos los PCs de un propietario
-func (r *ClientPCRepositoryImpl) FindByOwner(ctx context.Context, ownerUserID string) ([]*entities.ClientPC, error) {
+func (r *ClientPCRepositoryImpl) FindByOwner(ctx context.Context, ownerUserID string) ([]*clientpc.ClientPC, error) {
 	query := `
-		SELECT pc_id, ip, connection_status, registered_at, owner_user_id,
+		SELECT pc_id, identifier, ip, connection_status, registered_at, owner_user_id,
 			   last_seen_at, created_at, updated_at
 		FROM client_pcs 
 		WHERE owner_user_id = ?
@@ -138,9 +159,9 @@ func (r *ClientPCRepositoryImpl) FindByOwner(ctx context.Context, ownerUserID st
 }
 
 // FindOnlineByOwner busca todos los PCs online de un propietario
-func (r *ClientPCRepositoryImpl) FindOnlineByOwner(ctx context.Context, ownerUserID string) ([]*entities.ClientPC, error) {
+func (r *ClientPCRepositoryImpl) FindOnlineByOwner(ctx context.Context, ownerUserID string) ([]*clientpc.ClientPC, error) {
 	query := `
-		SELECT pc_id, ip, connection_status, registered_at, owner_user_id,
+		SELECT pc_id, identifier, ip, connection_status, registered_at, owner_user_id,
 			   last_seen_at, created_at, updated_at
 		FROM client_pcs 
 		WHERE owner_user_id = ? AND connection_status = 'ONLINE'
@@ -157,9 +178,9 @@ func (r *ClientPCRepositoryImpl) FindOnlineByOwner(ctx context.Context, ownerUse
 }
 
 // FindAll busca todos los ClientPCs con paginación
-func (r *ClientPCRepositoryImpl) FindAll(ctx context.Context, limit, offset int) ([]*entities.ClientPC, error) {
+func (r *ClientPCRepositoryImpl) FindAll(ctx context.Context, limit, offset int) ([]*clientpc.ClientPC, error) {
 	query := `
-		SELECT pc_id, ip, connection_status, registered_at, owner_user_id,
+		SELECT pc_id, identifier, ip, connection_status, registered_at, owner_user_id,
 			   last_seen_at, created_at, updated_at
 		FROM client_pcs 
 		ORDER BY created_at DESC
@@ -181,39 +202,20 @@ func (r *ClientPCRepositoryImpl) FindAll(ctx context.Context, limit, offset int)
 	return r.scanClientPCs(rows)
 }
 
-// FindOnlineClientPCs busca todos los PCs que están online
-func (r *ClientPCRepositoryImpl) FindOnlineClientPCs(ctx context.Context) ([]*entities.ClientPC, error) {
-	query := `
-		SELECT pc_id, ip, connection_status, registered_at, owner_user_id,
-			   last_seen_at, created_at, updated_at
-		FROM client_pcs 
-		WHERE connection_status = 'ONLINE'
-		ORDER BY last_seen_at DESC
-	`
-
-	rows, err := r.db.QueryContext(ctx, query)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	return r.scanClientPCs(rows)
-}
-
 // UpdateConnectionStatus actualiza solo el estado de conexión
-func (r *ClientPCRepositoryImpl) UpdateConnectionStatus(ctx context.Context, pcID *valueobjects.PCID, status *valueobjects.ConnectionStatus) error {
+func (r *ClientPCRepositoryImpl) UpdateConnectionStatus(ctx context.Context, pcID string, status clientpc.PCConnectionStatus) error {
 	query := `
 		UPDATE client_pcs 
 		SET connection_status = ?, updated_at = ?
 		WHERE pc_id = ?
 	`
 
-	_, err := r.db.ExecContext(ctx, query, status.Value(), time.Now().UTC(), pcID.Value())
+	_, err := r.db.ExecContext(ctx, query, string(status), time.Now().UTC(), pcID)
 	return err
 }
 
 // UpdateLastSeen actualiza el timestamp de última conexión
-func (r *ClientPCRepositoryImpl) UpdateLastSeen(ctx context.Context, pcID *valueobjects.PCID) error {
+func (r *ClientPCRepositoryImpl) UpdateLastSeen(ctx context.Context, pcID string) error {
 	query := `
 		UPDATE client_pcs 
 		SET last_seen_at = ?, updated_at = ?
@@ -221,58 +223,54 @@ func (r *ClientPCRepositoryImpl) UpdateLastSeen(ctx context.Context, pcID *value
 	`
 
 	now := time.Now().UTC()
-	_, err := r.db.ExecContext(ctx, query, now, now, pcID.Value())
+	_, err := r.db.ExecContext(ctx, query, now, now, pcID)
 	return err
 }
 
 // Delete elimina un ClientPC
-func (r *ClientPCRepositoryImpl) Delete(ctx context.Context, pcID *valueobjects.PCID) error {
+func (r *ClientPCRepositoryImpl) Delete(ctx context.Context, pcID string) error {
 	query := `DELETE FROM client_pcs WHERE pc_id = ?`
-	_, err := r.db.ExecContext(ctx, query, pcID.Value())
+	_, err := r.db.ExecContext(ctx, query, pcID)
 	return err
 }
 
-// Count retorna el número total de ClientPCs
-func (r *ClientPCRepositoryImpl) Count(ctx context.Context) (int64, error) {
-	query := `SELECT COUNT(*) FROM client_pcs`
+// CountByOwner retorna el número de PCs de un propietario específico
+func (r *ClientPCRepositoryImpl) CountByOwner(ctx context.Context, ownerID string) (int, error) {
+	query := `SELECT COUNT(*) FROM client_pcs WHERE owner_user_id = ?`
 
-	var count int64
-	err := r.db.QueryRowContext(ctx, query).Scan(&count)
-	return count, err
-}
-
-// CountOnline retorna el número de ClientPCs online
-func (r *ClientPCRepositoryImpl) CountOnline(ctx context.Context) (int64, error) {
-	query := `SELECT COUNT(*) FROM client_pcs WHERE connection_status = 'ONLINE'`
-
-	var count int64
-	err := r.db.QueryRowContext(ctx, query).Scan(&count)
+	var count int
+	err := r.db.QueryRowContext(ctx, query, ownerID).Scan(&count)
 	return count, err
 }
 
 // scanClientPCs es un helper para escanear múltiples filas
-func (r *ClientPCRepositoryImpl) scanClientPCs(rows *sql.Rows) ([]*entities.ClientPC, error) {
-	var pcs []*entities.ClientPC
+func (r *ClientPCRepositoryImpl) scanClientPCs(rows *sql.Rows) ([]*clientpc.ClientPC, error) {
+	var pcs []*clientpc.ClientPC
 
 	for rows.Next() {
-		var pcIDStr, ip, connectionStatusStr, ownerUserID string
+		var pcIDStr, identifier, ip, connectionStatusStr, ownerUserID string
 		var registeredAt, createdAt, updatedAt time.Time
 		var lastSeenAt *time.Time
 
 		err := rows.Scan(
-			&pcIDStr, &ip, &connectionStatusStr, &registeredAt,
+			&pcIDStr, &identifier, &ip, &connectionStatusStr, &registeredAt,
 			&ownerUserID, &lastSeenAt, &createdAt, &updatedAt,
 		)
 		if err != nil {
 			return nil, err
 		}
 
-		pc, err := entities.ReconstructClientPCFromDB(
-			pcIDStr, "", ownerUserID, connectionStatusStr, ip,
-			registeredAt, createdAt, updatedAt, lastSeenAt,
-		)
-		if err != nil {
-			return nil, err
+		// Construir la entidad simple
+		pc := &clientpc.ClientPC{
+			PCID:             pcIDStr,
+			Identifier:       identifier,
+			IP:               ip,
+			ConnectionStatus: clientpc.PCConnectionStatus(connectionStatusStr),
+			RegisteredAt:     registeredAt,
+			OwnerUserID:      ownerUserID,
+			LastSeenAt:       lastSeenAt,
+			CreatedAt:        createdAt,
+			UpdatedAt:        updatedAt,
 		}
 
 		pcs = append(pcs, pc)

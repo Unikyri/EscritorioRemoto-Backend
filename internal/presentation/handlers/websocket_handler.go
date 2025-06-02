@@ -40,21 +40,23 @@ type ClientConnection struct {
 
 // WebSocketHandler manages WebSocket connections for client PCs
 type WebSocketHandler struct {
-	authService   *userservice.AuthService
-	pcService     pcservice.IPCService
-	connections   map[string]*ClientConnection // map[connectionID]*ClientConnection
-	pcConnections map[string]*ClientConnection // map[pcID]*ClientConnection
-	mutex         sync.RWMutex
+	authService    *userservice.AuthService
+	pcService      pcservice.IPCService
+	adminWSHandler *AdminWebSocketHandler
+	connections    map[string]*ClientConnection // map[connectionID]*ClientConnection
+	pcConnections  map[string]*ClientConnection // map[pcID]*ClientConnection
+	mutex          sync.RWMutex
 }
 
 // NewWebSocketHandler creates a new WebSocket handler
-func NewWebSocketHandler(authService *userservice.AuthService, pcService pcservice.IPCService) *WebSocketHandler {
+func NewWebSocketHandler(authService *userservice.AuthService, pcService pcservice.IPCService, adminWSHandler *AdminWebSocketHandler) *WebSocketHandler {
 	return &WebSocketHandler{
-		authService:   authService,
-		pcService:     pcService,
-		connections:   make(map[string]*ClientConnection),
-		pcConnections: make(map[string]*ClientConnection),
-		mutex:         sync.RWMutex{},
+		authService:    authService,
+		pcService:      pcService,
+		adminWSHandler: adminWSHandler,
+		connections:    make(map[string]*ClientConnection),
+		pcConnections:  make(map[string]*ClientConnection),
+		mutex:          sync.RWMutex{},
 	}
 }
 
@@ -100,6 +102,11 @@ func (h *WebSocketHandler) HandleWebSocket(c *gin.Context) {
 					log.Printf("Error updating PC status to offline: %v", err)
 				} else {
 					log.Printf("PC marked as offline: %s (%s)", clientConn.PCID, clientConn.Username)
+
+					// Notificar a administradores sobre la desconexión del PC
+					if h.adminWSHandler != nil {
+						h.adminWSHandler.BroadcastPCDisconnected(clientConn.PCID, "", clientConn.UserID)
+					}
 				}
 			}
 		}
@@ -214,6 +221,11 @@ func (h *WebSocketHandler) handlePCRegistration(conn *websocket.Conn, clientConn
 	h.mutex.Lock()
 	h.pcConnections[pc.PCID] = clientConn
 	h.mutex.Unlock()
+
+	// Notificar a administradores sobre el registro del PC
+	if h.adminWSHandler != nil {
+		h.adminWSHandler.BroadcastPCRegistered(pc.PCID, pc.Identifier, pc.OwnerUserID, pc.IP)
+	}
 
 	// Send success response
 	h.sendPCRegistrationResponse(conn, true, pc.PCID, "")

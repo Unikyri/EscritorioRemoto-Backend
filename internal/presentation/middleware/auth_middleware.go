@@ -9,6 +9,12 @@ import (
 	"github.com/unikyri/escritorio-remoto-backend/internal/presentation/dto"
 )
 
+// Constantes para claves del contexto
+const (
+	UserIDKey = "user_id"
+	UserKey   = "user"
+)
+
 // AuthMiddleware creates a JWT authentication middleware
 func AuthMiddleware(authService *userservice.AuthService) gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -51,7 +57,8 @@ func AuthMiddleware(authService *userservice.AuthService) gin.HandlerFunc {
 		}
 
 		// Agregar los claims del usuario al contexto
-		c.Set("user", claims)
+		c.Set(UserKey, claims)
+		c.Set(UserIDKey, claims.UserID) // Asumiendo que claims tiene un campo UserID
 		c.Next()
 	}
 }

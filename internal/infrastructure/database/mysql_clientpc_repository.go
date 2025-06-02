@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/unikyri/escritorio-remoto-backend/internal/application/interfaces"
@@ -219,19 +220,49 @@ func (r *MySQLClientPCRepository) Delete(ctx context.Context, pcID string) error
 
 // FindAll retrieves all ClientPCs with optional filtering
 func (r *MySQLClientPCRepository) FindAll(ctx context.Context, limit, offset int) ([]*clientpc.ClientPC, error) {
+	log.Printf("DEBUG FindAll: Starting query with limit=%d, offset=%d", limit, offset)
+
 	query := `
 		SELECT pc_id, identifier, ip, connection_status, registered_at, owner_user_id, last_seen_at, created_at, updated_at
 		FROM client_pcs 
-		ORDER BY created_at DESC
-		LIMIT ? OFFSET ?`
+		ORDER BY created_at DESC`
 
-	rows, err := r.db.QueryContext(ctx, query, limit, offset)
+	var rows *sql.Rows
+	var err error
+
+	if limit > 0 {
+		query += " LIMIT ? OFFSET ?"
+		log.Printf("DEBUG FindAll: Executing query with LIMIT: %s", query)
+		log.Printf("DEBUG FindAll: Query params: limit=%d, offset=%d", limit, offset)
+		rows, err = r.db.QueryContext(ctx, query, limit, offset)
+	} else {
+		log.Printf("DEBUG FindAll: Executing query without LIMIT: %s", query)
+		rows, err = r.db.QueryContext(ctx, query)
+	}
+
 	if err != nil {
+		log.Printf("DEBUG FindAll: Query failed with error: %v", err)
 		return nil, fmt.Errorf("error finding all ClientPCs: %w", err)
 	}
 	defer rows.Close()
 
-	return r.scanClientPCs(rows)
+	log.Printf("DEBUG FindAll: Query executed successfully, starting scan")
+	result, err := r.scanClientPCs(rows)
+
+	if err != nil {
+		log.Printf("DEBUG FindAll: Scan failed with error: %v", err)
+		return nil, err
+	}
+
+	log.Printf("DEBUG FindAll: Scan completed, found %d PCs", len(result))
+
+	// Log cada PC encontrado
+	for i, pc := range result {
+		log.Printf("DEBUG FindAll: PC[%d] = ID:%s, Identifier:%s, Status:%s",
+			i, pc.PCID, pc.Identifier, pc.ConnectionStatus)
+	}
+
+	return result, nil
 }
 
 // CountByOwner returns the count of ClientPCs for a specific owner

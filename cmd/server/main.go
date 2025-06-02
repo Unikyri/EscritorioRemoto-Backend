@@ -44,7 +44,8 @@ func main() {
 	pcService := pcservice.NewPCService(clientPCRepository, clientPCFactory)
 
 	authHandler := handlers.NewAuthHandler(authService)
-	webSocketHandler := handlers.NewWebSocketHandler(authService, pcService)
+	adminWSHandler := handlers.NewAdminWebSocketHandler(authService)
+	webSocketHandler := handlers.NewWebSocketHandler(authService, pcService, adminWSHandler)
 	pcHandler := handlers.NewPCHandler(pcService, authService)
 
 	router := gin.Default()
@@ -73,19 +74,52 @@ func main() {
 	ws := router.Group("/ws")
 	{
 		ws.GET("/client", webSocketHandler.HandleWebSocket)
+		ws.GET("/admin", middleware.AuthMiddleware(authService), adminWSHandler.HandleAdminWebSocket)
 	}
 
 	router.GET("/health", func(c *gin.Context) {
 		c.JSON(200, gin.H{
 			"status":  "ok",
-			"message": "Escritorio Remoto Backend - FASE 3 PASO 1",
-			"version": "0.3.0-fase3-paso1",
+			"message": "Escritorio Remoto Backend - FASE 3 PASO 1 + Notificaciones",
+			"version": "0.3.1-fase3-paso1-notifications",
+		})
+	})
+
+	// Endpoint temporal de debug sin autenticación
+	router.GET("/debug/pcs", func(c *gin.Context) {
+		log.Printf("DEBUG /debug/pcs: Starting query")
+
+		// Intentar query sin límites
+		pcs, err := clientPCRepository.FindAll(c.Request.Context(), 0, 0)
+		if err != nil {
+			log.Printf("DEBUG /debug/pcs: Database error: %v", err)
+			c.JSON(500, gin.H{
+				"error":   "Database error",
+				"message": err.Error(),
+			})
+			return
+		}
+
+		log.Printf("DEBUG /debug/pcs: Query successful, count=%d", len(pcs))
+
+		// Log cada PC encontrado
+		for i, pc := range pcs {
+			log.Printf("DEBUG /debug/pcs: PC[%d] = ID:%s, Identifier:%s, Status:%s, Owner:%s",
+				i, pc.PCID, pc.Identifier, pc.ConnectionStatus, pc.OwnerUserID)
+		}
+
+		c.JSON(200, gin.H{
+			"success": true,
+			"count":   len(pcs),
+			"data":    pcs,
+			"message": "Debug endpoint - PCs retrieved without authentication",
 		})
 	})
 
 	port := getEnv("SERVER_PORT", "8080")
 	log.Printf("Servidor iniciando en puerto %s", port)
 	log.Printf("WebSocket Cliente: ws://localhost:%s/ws/client", port)
+	log.Printf("WebSocket Admin: ws://localhost:%s/ws/admin", port)
 	log.Printf("API Admin PCs: http://localhost:%s/api/admin/pcs", port)
 	log.Printf("API Admin PCs Online: http://localhost:%s/api/admin/pcs/online", port)
 

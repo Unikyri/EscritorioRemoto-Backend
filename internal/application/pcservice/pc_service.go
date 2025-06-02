@@ -37,6 +37,8 @@ func NewPCService(pcRepository interfaces.IClientPCRepository, pcFactory clientp
 
 // RegisterPC registers a new PC or updates an existing one for a specific user
 func (s *PCService) RegisterPC(ctx context.Context, ownerUserID, pcIdentifier, ip string) (*clientpc.ClientPC, error) {
+	fmt.Printf("DEBUG RegisterPC: Starting registration for user=%s, identifier=%s, ip=%s\n", ownerUserID, pcIdentifier, ip)
+	
 	// Validate input parameters
 	if ownerUserID == "" {
 		return nil, errors.New("owner user ID cannot be empty")
@@ -48,14 +50,20 @@ func (s *PCService) RegisterPC(ctx context.Context, ownerUserID, pcIdentifier, i
 		return nil, errors.New("IP address cannot be empty")
 	}
 
+	fmt.Printf("DEBUG RegisterPC: Input validation passed\n")
+
 	// Check if PC is already registered for this user
 	existingPC, err := s.pcRepository.FindByIdentifierAndOwner(ctx, pcIdentifier, ownerUserID)
 	if err != nil {
+		fmt.Printf("DEBUG RegisterPC: Error checking existing PC: %v\n", err)
 		return nil, fmt.Errorf("error checking existing PC: %w", err)
 	}
 
+	fmt.Printf("DEBUG RegisterPC: Existing PC check completed, found: %v\n", existingPC != nil)
+
 	// If PC already exists, update its status and last seen
 	if existingPC != nil {
+		fmt.Printf("DEBUG RegisterPC: Updating existing PC: %s\n", existingPC.PCID)
 		existingPC.SetOnline()
 		// Update IP if it has changed
 		if existingPC.IP != ip {
@@ -65,27 +73,38 @@ func (s *PCService) RegisterPC(ctx context.Context, ownerUserID, pcIdentifier, i
 
 		err = s.pcRepository.Save(ctx, existingPC)
 		if err != nil {
+			fmt.Printf("DEBUG RegisterPC: Error saving existing PC: %v\n", err)
 			return nil, fmt.Errorf("error updating existing PC: %w", err)
 		}
 
+		fmt.Printf("DEBUG RegisterPC: Existing PC updated successfully: %s\n", existingPC.PCID)
 		return existingPC, nil
 	}
+
+	fmt.Printf("DEBUG RegisterPC: Creating new PC\n")
 
 	// Create new PC if it doesn't exist
 	newPC, err := s.pcFactory.CreateClientPC(pcIdentifier, ip, ownerUserID)
 	if err != nil {
+		fmt.Printf("DEBUG RegisterPC: Error creating new PC: %v\n", err)
 		return nil, fmt.Errorf("error creating new PC: %w", err)
 	}
 
+	fmt.Printf("DEBUG RegisterPC: New PC created with ID: %s\n", newPC.PCID)
+
 	// Mark PC as online since it's being registered
 	newPC.SetOnline()
+	fmt.Printf("DEBUG RegisterPC: PC marked as online\n")
 
 	// Save the new PC
+	fmt.Printf("DEBUG RegisterPC: About to save new PC to repository\n")
 	err = s.pcRepository.Save(ctx, newPC)
 	if err != nil {
+		fmt.Printf("DEBUG RegisterPC: Error saving new PC: %v\n", err)
 		return nil, fmt.Errorf("error saving new PC: %w", err)
 	}
 
+	fmt.Printf("DEBUG RegisterPC: New PC saved successfully: %s\n", newPC.PCID)
 	return newPC, nil
 }
 
