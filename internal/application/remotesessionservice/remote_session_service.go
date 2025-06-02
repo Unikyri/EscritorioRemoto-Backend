@@ -5,8 +5,8 @@ import (
 	"fmt"
 
 	"github.com/unikyri/escritorio-remoto-backend/internal/application/interfaces"
-	"github.com/unikyri/escritorio-remoto-backend/internal/domain/remotesession"
 	events "github.com/unikyri/escritorio-remoto-backend/internal/domain/events"
+	"github.com/unikyri/escritorio-remoto-backend/internal/domain/remotesession"
 )
 
 // RemoteSessionService servicio de aplicación para sesiones remotas
@@ -44,7 +44,7 @@ func (rss *RemoteSessionService) InitiateSession(adminUserID, clientPCID string)
 	}
 
 	// Validar que el PC cliente existe y está online
-	pc, err := rss.pcRepo.FindByID(clientPCID)
+	pc, err := rss.pcRepo.FindByID(context.Background(), clientPCID)
 	if err != nil {
 		return nil, fmt.Errorf("error finding client PC: %w", err)
 	}
@@ -53,12 +53,15 @@ func (rss *RemoteSessionService) InitiateSession(adminUserID, clientPCID string)
 	}
 
 	// Verificar que el PC está online
-	if pc.ConnectionStatus() != "ONLINE" {
+	if string(pc.ConnectionStatus) != "ONLINE" {
 		return nil, fmt.Errorf("client PC is not online")
 	}
 
 	// Crear nueva sesión
-	session := remotesession.NewRemoteSession(adminUserID, clientPCID)
+	session, err := remotesession.NewRemoteSession(adminUserID, clientPCID)
+	if err != nil {
+		return nil, fmt.Errorf("error creating session: %w", err)
+	}
 
 	// Guardar en repositorio
 	err = rss.sessionRepo.Save(session)
@@ -71,6 +74,8 @@ func (rss *RemoteSessionService) InitiateSession(adminUserID, clientPCID string)
 		session.SessionID(),
 		session.AdminUserID(),
 		session.ClientPCID(),
+		"", // adminUsername - podríamos obtenerlo del usuario si es necesario
+		"", // clientPCName - podríamos obtenerlo del PC si es necesario
 	)
 	rss.eventBus.Publish(event)
 
@@ -80,7 +85,7 @@ func (rss *RemoteSessionService) InitiateSession(adminUserID, clientPCID string)
 // AcceptSession acepta una sesión de control remoto
 func (rss *RemoteSessionService) AcceptSession(sessionID string) error {
 	// Obtener sesión
-	session, err := rss.sessionRepo.FindByID(sessionID)
+	session, err := rss.sessionRepo.FindById(sessionID)
 	if err != nil {
 		return fmt.Errorf("error finding session: %w", err)
 	}
@@ -105,6 +110,7 @@ func (rss *RemoteSessionService) AcceptSession(sessionID string) error {
 		session.SessionID(),
 		session.AdminUserID(),
 		session.ClientPCID(),
+		*session.StartTime(),
 	)
 	rss.eventBus.Publish(event)
 
@@ -114,7 +120,7 @@ func (rss *RemoteSessionService) AcceptSession(sessionID string) error {
 // RejectSession rechaza una sesión de control remoto
 func (rss *RemoteSessionService) RejectSession(sessionID, reason string) error {
 	// Obtener sesión
-	session, err := rss.sessionRepo.FindByID(sessionID)
+	session, err := rss.sessionRepo.FindById(sessionID)
 	if err != nil {
 		return fmt.Errorf("error finding session: %w", err)
 	}
@@ -139,7 +145,6 @@ func (rss *RemoteSessionService) RejectSession(sessionID, reason string) error {
 		session.SessionID(),
 		session.AdminUserID(),
 		session.ClientPCID(),
-		reason,
 	)
 	rss.eventBus.Publish(event)
 
@@ -148,7 +153,7 @@ func (rss *RemoteSessionService) RejectSession(sessionID, reason string) error {
 
 // GetSessionById obtiene una sesión por ID
 func (rss *RemoteSessionService) GetSessionById(sessionID string) (*remotesession.RemoteSession, error) {
-	return rss.sessionRepo.FindByID(sessionID)
+	return rss.sessionRepo.FindById(sessionID)
 }
 
 // GetActiveSessions obtiene todas las sesiones activas
@@ -168,4 +173,4 @@ func (rss *RemoteSessionService) GetSessionsByPC(clientPCID string) ([]*remotese
 		return nil, fmt.Errorf("failed to get sessions for PC: %w", err)
 	}
 	return sessions, nil
-} 
+}

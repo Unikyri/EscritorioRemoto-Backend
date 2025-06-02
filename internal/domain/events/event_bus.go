@@ -1,14 +1,16 @@
 package events
 
+import "github.com/unikyri/escritorio-remoto-backend/internal/domain/shared/events"
+
 // IEventBus interface para el bus de eventos
 type IEventBus interface {
-	Publish(event Event)
+	Publish(event events.DomainEvent)
 	Subscribe(eventType string, handler EventHandler)
 }
 
 // EventHandler interface para manejadores de eventos
 type EventHandler interface {
-	Handle(event Event) error
+	Handle(event events.DomainEvent) error
 }
 
 // SimpleEventBus implementación simple del bus de eventos
@@ -24,7 +26,7 @@ func NewSimpleEventBus() *SimpleEventBus {
 }
 
 // Publish publica un evento
-func (bus *SimpleEventBus) Publish(event Event) {
+func (bus *SimpleEventBus) Publish(event events.DomainEvent) {
 	if handlers, exists := bus.handlers[event.Type()]; exists {
 		for _, handler := range handlers {
 			// En una implementación real, esto sería asíncrono
@@ -41,4 +43,4 @@ func (bus *SimpleEventBus) Subscribe(eventType string, handler EventHandler) {
 		bus.handlers[eventType] = make([]EventHandler, 0)
 	}
 	bus.handlers[eventType] = append(bus.handlers[eventType], handler)
-} 
+}

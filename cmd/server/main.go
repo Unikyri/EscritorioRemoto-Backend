@@ -6,16 +6,20 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/unikyri/escritorio-remoto-backend/internal/application/pcservice"
+	"github.com/unikyri/escritorio-remoto-backend/internal/application/remotesessionservice"
 	"github.com/unikyri/escritorio-remoto-backend/internal/application/userservice"
 	"github.com/unikyri/escritorio-remoto-backend/internal/domain/clientpc"
+	"github.com/unikyri/escritorio-remoto-backend/internal/domain/events"
 	"github.com/unikyri/escritorio-remoto-backend/internal/infrastructure/database"
+	"github.com/unikyri/escritorio-remoto-backend/internal/infrastructure/persistence/mysql"
 	"github.com/unikyri/escritorio-remoto-backend/internal/presentation/handlers"
+	httpHandlers "github.com/unikyri/escritorio-remoto-backend/internal/presentation/http/handlers"
 	"github.com/unikyri/escritorio-remoto-backend/internal/presentation/middleware"
 )
 
 func main() {
 	log.Println("Escritorio Remoto - Backend Server")
-	log.Println("FASE 3 - PASO 1: Visualización de PCs Cliente y Estado")
+	log.Println("FASE 4 - PASO 1: Inicio, Aceptación/Rechazo de Sesión de Control Remoto")
 
 	dbConfig := database.Config{
 		Host:               getEnv("DB_HOST", "localhost"),
@@ -48,6 +52,20 @@ func main() {
 	webSocketHandler := handlers.NewWebSocketHandler(authService, pcService, adminWSHandler)
 	pcHandler := handlers.NewPCHandler(pcService, authService)
 
+	// Inicializar dependencias para sesiones remotas
+	eventBus := events.NewSimpleEventBus()
+	remoteSessionRepository := mysql.NewRemoteSessionRepository(db)
+	remoteSessionService := remotesessionservice.NewRemoteSessionService(
+		remoteSessionRepository,
+		userRepository,
+		clientPCRepository,
+		eventBus,
+	)
+
+	// Crear handler de control remoto (necesita WebSocket hub)
+	// Nota: Por ahora usamos nil para websocketHub, se configurará cuando implementemos el hub completo
+	remoteControlHandler := httpHandlers.NewRemoteControlHandler(remoteSessionService, nil)
+
 	router := gin.Default()
 
 	router.Use(func(c *gin.Context) {
@@ -69,6 +87,12 @@ func main() {
 	{
 		admin.GET("/pcs", pcHandler.GetAllClientPCs)
 		admin.GET("/pcs/online", pcHandler.GetOnlineClientPCs)
+
+		// Rutas para sesiones de control remoto
+		admin.POST("/sessions/initiate", remoteControlHandler.InitiateSession)
+		admin.GET("/sessions/:sessionId/status", remoteControlHandler.GetSessionStatus)
+		admin.GET("/sessions/active", remoteControlHandler.GetActiveSessions)
+		admin.GET("/sessions/my", remoteControlHandler.GetUserSessions)
 	}
 
 	ws := router.Group("/ws")
@@ -80,8 +104,8 @@ func main() {
 	router.GET("/health", func(c *gin.Context) {
 		c.JSON(200, gin.H{
 			"status":  "ok",
-			"message": "Escritorio Remoto Backend - FASE 3 PASO 1 + Notificaciones",
-			"version": "0.3.1-fase3-paso1-notifications",
+			"message": "Escritorio Remoto Backend - FASE 4 PASO 1: Sesiones de Control Remoto",
+			"version": "0.4.1-fase4-paso1-remote-sessions",
 		})
 	})
 
@@ -122,6 +146,10 @@ func main() {
 	log.Printf("WebSocket Admin: ws://localhost:%s/ws/admin", port)
 	log.Printf("API Admin PCs: http://localhost:%s/api/admin/pcs", port)
 	log.Printf("API Admin PCs Online: http://localhost:%s/api/admin/pcs/online", port)
+	log.Printf("API Iniciar Sesión: http://localhost:%s/api/admin/sessions/initiate", port)
+	log.Printf("API Estado Sesión: http://localhost:%s/api/admin/sessions/:sessionId/status", port)
+	log.Printf("API Sesiones Activas: http://localhost:%s/api/admin/sessions/active", port)
+	log.Printf("API Mis Sesiones: http://localhost:%s/api/admin/sessions/my", port)
 
 	if err := router.Run(":" + port); err != nil {
 		log.Fatalf("Error al iniciar el servidor: %v", err)

@@ -11,14 +11,14 @@ import (
 // SessionHandler maneja los mensajes WebSocket relacionados con sesiones
 type SessionHandler struct {
 	sessionService *remotesessionservice.RemoteSessionService
-	hub           *Hub
+	hub            *Hub
 }
 
 // NewSessionHandler crea una nueva instancia del handler de sesiones
 func NewSessionHandler(sessionService *remotesessionservice.RemoteSessionService, hub *Hub) *SessionHandler {
 	return &SessionHandler{
 		sessionService: sessionService,
-		hub:           hub,
+		hub:            hub,
 	}
 }
 
@@ -49,7 +49,7 @@ func (sh *SessionHandler) handleSessionAccepted(clientID string, data []byte) er
 	err := sh.sessionService.AcceptSession(message.SessionID)
 	if err != nil {
 		log.Printf("Error accepting session %s: %v", message.SessionID, err)
-		
+
 		// Enviar mensaje de error al cliente
 		errorMsg := NewSessionFailedMessage(message.SessionID, err.Error())
 		sh.hub.SendToClient(context.Background(), clientID, errorMsg)
@@ -88,7 +88,7 @@ func (sh *SessionHandler) handleSessionRejected(clientID string, data []byte) er
 	}
 
 	// Rechazar la sesión usando el servicio
-	err := sh.sessionService.RejectSession(message.SessionID)
+	err := sh.sessionService.RejectSession(message.SessionID, message.Reason)
 	if err != nil {
 		log.Printf("Error rejecting session %s: %v", message.SessionID, err)
 		return err
@@ -128,4 +128,4 @@ func (sh *SessionHandler) handleHeartbeat(clientID string, data []byte) error {
 func (sh *SessionHandler) SendRemoteControlRequest(sessionID, adminUserID, clientPCID, adminUsername string) error {
 	message := NewRemoteControlRequestMessage(sessionID, adminUserID, clientPCID, adminUsername)
 	return sh.hub.SendToClient(context.Background(), clientPCID, message)
-} 
+}
