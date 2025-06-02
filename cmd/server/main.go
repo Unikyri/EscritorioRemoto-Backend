@@ -10,9 +10,9 @@ import (
 	"github.com/unikyri/escritorio-remoto-backend/internal/application/userservice"
 	"github.com/unikyri/escritorio-remoto-backend/internal/domain/clientpc"
 	"github.com/unikyri/escritorio-remoto-backend/internal/domain/events"
+	"github.com/unikyri/escritorio-remoto-backend/internal/infrastructure/comms/websocket"
 	"github.com/unikyri/escritorio-remoto-backend/internal/infrastructure/database"
 	"github.com/unikyri/escritorio-remoto-backend/internal/infrastructure/persistence/mysql"
-	"github.com/unikyri/escritorio-remoto-backend/internal/infrastructure/comms/websocket"
 	"github.com/unikyri/escritorio-remoto-backend/internal/presentation/handlers"
 	httpHandlers "github.com/unikyri/escritorio-remoto-backend/internal/presentation/http/handlers"
 	"github.com/unikyri/escritorio-remoto-backend/internal/presentation/middleware"
@@ -103,7 +103,7 @@ func main() {
 	ws := router.Group("/ws")
 	{
 		ws.GET("/client", webSocketHandler.HandleWebSocket)
-		ws.GET("/admin", middleware.AuthMiddleware(authService), adminWSHandler.HandleAdminWebSocket)
+		ws.GET("/admin", adminWSHandler.HandleAdminWebSocket)
 	}
 
 	router.GET("/health", func(c *gin.Context) {

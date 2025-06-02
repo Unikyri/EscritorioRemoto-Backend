@@ -3,6 +3,7 @@ package handlers
 import (
 	"log"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -49,15 +50,32 @@ func NewAdminWebSocketHandler(authService *userservice.AuthService) *AdminWebSoc
 
 // HandleAdminWebSocket maneja las conexiones WebSocket de administradores
 func (h *AdminWebSocketHandler) HandleAdminWebSocket(c *gin.Context) {
-	// Verificar autenticación JWT
-	userInfo, exists := c.Get("user")
-	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Authentication required"})
+	// Obtener token desde query parameter o header
+	var token string
+
+	// Intentar desde query parameter primero
+	token = c.Query("token")
+	if token == "" {
+		// Intentar desde header Authorization
+		authHeader := c.GetHeader("Authorization")
+		if authHeader != "" && strings.HasPrefix(authHeader, "Bearer ") {
+			token = strings.TrimPrefix(authHeader, "Bearer ")
+		}
+	}
+
+	if token == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Authentication token required"})
 		return
 	}
 
-	userClaims, ok := userInfo.(*userservice.JWTClaims)
-	if !ok || userClaims.Role != string(user.RoleAdministrator) {
+	// Validar token directamente
+	userClaims, err := h.authService.ValidateToken(token)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid or expired token"})
+		return
+	}
+
+	if userClaims.Role != string(user.RoleAdministrator) {
 		c.JSON(http.StatusForbidden, gin.H{"error": "Admin privileges required"})
 		return
 	}
