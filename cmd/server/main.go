@@ -12,6 +12,7 @@ import (
 	"github.com/unikyri/escritorio-remoto-backend/internal/domain/events"
 	"github.com/unikyri/escritorio-remoto-backend/internal/infrastructure/database"
 	"github.com/unikyri/escritorio-remoto-backend/internal/infrastructure/persistence/mysql"
+	"github.com/unikyri/escritorio-remoto-backend/internal/infrastructure/comms/websocket"
 	"github.com/unikyri/escritorio-remoto-backend/internal/presentation/handlers"
 	httpHandlers "github.com/unikyri/escritorio-remoto-backend/internal/presentation/http/handlers"
 	"github.com/unikyri/escritorio-remoto-backend/internal/presentation/middleware"
@@ -52,6 +53,11 @@ func main() {
 	webSocketHandler := handlers.NewWebSocketHandler(authService, pcService, adminWSHandler)
 	pcHandler := handlers.NewPCHandler(pcService, authService)
 
+	// Inicializar WebSocket Hub para comunicación con clientes
+	websocketHub := websocket.NewHub()
+	go websocketHub.Run() // Ejecutar el hub en una goroutine separada
+	log.Println("WebSocket Hub iniciado")
+
 	// Inicializar dependencias para sesiones remotas
 	eventBus := events.NewSimpleEventBus()
 	remoteSessionRepository := mysql.NewRemoteSessionRepository(db)
@@ -62,9 +68,8 @@ func main() {
 		eventBus,
 	)
 
-	// Crear handler de control remoto (necesita WebSocket hub)
-	// Nota: Por ahora usamos nil para websocketHub, se configurará cuando implementemos el hub completo
-	remoteControlHandler := httpHandlers.NewRemoteControlHandler(remoteSessionService, nil)
+	// Crear handler de control remoto con WebSocket hub
+	remoteControlHandler := httpHandlers.NewRemoteControlHandler(remoteSessionService, websocketHub)
 
 	router := gin.Default()
 
