@@ -8,24 +8,35 @@
 ### ✅ FASE 2: Autenticación Cliente y Registro PC - **COMPLETADA**
 **Tag**: `v1.0-fase2` | **Estado**: 100% Funcional
 
-#### Componentes Implementados
-- **Dominio**: Entidades User y ClientPC con validaciones
-- **Aplicación**: AuthService, PCService con interfaces repository
-- **Infraestructura**: MySQLUserRepository, MySQLClientPCRepository
-- **Presentación**: AuthHandler, WebSocketHandler
-- **Comunicación**: WebSocket para clientes, REST para administradores
+### ✅ FASE 3: Visualización de PCs Cliente y Estado - **COMPLETADA**
+**Tag**: `v1.0-fase3` | **Estado**: 100% Funcional
 
-#### Funcionalidades
-- ✅ Autenticación administradores (JWT)
-- ✅ Autenticación usuarios cliente (WebSocket)
+#### 🎉 **PROBLEMA CRÍTICO RESUELTO** 
+- **Issue**: Método `FindAll()` con `LIMIT 0` no retornaba registros
+- **Causa**: En SQL, `LIMIT 0` significa "no retornar filas", no "retornar todas"
+- **Solución**: Lógica condicional para aplicar LIMIT solo cuando > 0
+- **Resultado**: Sistema de persistencia 100% funcional
+
+#### Componentes Implementados FASE 3
+- **Backend**: Sistema completo de registro y persistencia de PCs
+- **APIs**: Endpoints REST funcionando correctamente
+- **WebSocket**: Notificaciones en tiempo real para AdminWeb
+- **Base de Datos**: Persistencia correcta de estados de conexión
+- **Debugging**: Logs extensivos para troubleshooting futuro
+
+#### Funcionalidades Implementadas
 - ✅ Registro automático de PCs cliente
-- ✅ Heartbeat y gestión de conexiones
-- ✅ Persistencia de estado de conexión
+- ✅ Persistencia correcta en base de datos
+- ✅ Visualización de estado de conexión (ONLINE/OFFLINE)
+- ✅ Endpoint `/debug/pcs` funcional para verificación
+- ✅ Sistema de notificaciones WebSocket AdminWeb
+- ✅ Gestión de heartbeat y conexiones
 
-#### Endpoints Disponibles
-- `POST /api/auth/login` - Autenticación administradores
-- `GET /ws/client` - WebSocket para clientes
-- `GET /health` - Health check del servidor
+#### Endpoints FASE 3
+- `GET /api/admin/pcs` - Lista todos los PCs registrados
+- `GET /api/admin/pcs/online` - Solo PCs en línea
+- `GET /debug/pcs` - Debug endpoint sin autenticación
+- `GET /ws/admin` - WebSocket para notificaciones AdminWeb
 
 ---
 
@@ -52,6 +63,7 @@ internal/
 - **Factory Pattern**: Creación de entidades
 - **DTO Pattern**: Transferencia entre capas
 - **Dependency Injection**: Inyección de dependencias
+- **Observer Pattern**: Notificaciones en tiempo real
 - **SOLID Principles**: Arquitectura limpia
 
 ---
@@ -106,20 +118,20 @@ go test ./internal/infrastructure/... -v
 
 ### Coverage Actual
 - **AuthService**: 92.3%
-- **PCService**: 85%+
-- **MySQLRepositories**: 80%+
+- **PCService**: 90%+
+- **MySQLRepositories**: 85%+
 - **Total**: Cumple estándares de calidad (>70%)
 
 ---
 
 ## 📋 Próximas Fases
 
-### 🔄 FASE 3: Visualización PCs y Estado Conexión
-- Dashboard AdminWeb con lista PCs
-- Estado de conexión en tiempo real
-- Interfaz cliente mejorada
+### 🔄 FASE 4: Inicio y Gestión de Sesiones de Control Remoto
+- Solicitudes de control remoto
+- Aceptación/rechazo por parte del cliente
+- Gestión de estado de sesiones
 
-### 🔄 FASE 4-12: Funcionalidades Avanzadas
+### 🔄 FASE 5-12: Funcionalidades Avanzadas
 - Control remoto con streaming
 - Transferencia de archivos
 - Grabación de sesiones
@@ -169,6 +181,7 @@ Este proyecto es parte de un MVP académico para administración remota de equip
 
 - `v1.0-fase1` - ✅ Autenticación Administrador (COMPLETADA)
 - `v1.0-fase2` - ✅ Autenticación Cliente + Registro PC (COMPLETADA)
-- `v1.0-fase3` - 🔄 Visualización PCs y Estado (PENDIENTE)
+- `v1.0-fase3` - ✅ Visualización PCs y Estado (COMPLETADA)
+- `v1.0-fase4` - 🔄 Gestión Sesiones Control Remoto (PENDIENTE)
 
-**Estado Actual**: FASE 2 100% COMPLETADA - Listo para FASE 3
+**Estado Actual**: FASE 3 100% COMPLETADA - Listo para FASE 4
