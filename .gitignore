@@ -1,0 +1,55 @@
+# Binarios
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+bin/
+storage/
+
+# Archivos de test
+*.test
+
+# Archivos de cobertura
+*.out
+coverage.html
+
+# Logs
+logs/*.log
+*.log
+
+# Variables de entorno (NO COMMITAR)
+.env
+.env.local
+.env.production
+
+# Archivos de configuración sensibles
+configs/*.production.yml
+configs/*.secret.yml
+
+# Archivos de IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Archivos del sistema operativo
+.DS_Store
+Thumbs.db
+
+# Módulos Go
+vendor/
+
+# Archivos temporales
+tmp/
+temp/
+
+# Archivos de base de datos locales
+*.db
+*.sqlite
+*.sqlite3
+
+# Certificados y llaves
+*.key
+*.crt
+*.pem 
