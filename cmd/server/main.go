@@ -10,7 +10,6 @@ import (
 	"github.com/unikyri/escritorio-remoto-backend/internal/application/userservice"
 	"github.com/unikyri/escritorio-remoto-backend/internal/domain/clientpc"
 	"github.com/unikyri/escritorio-remoto-backend/internal/domain/events"
-	"github.com/unikyri/escritorio-remoto-backend/internal/infrastructure/comms/websocket"
 	"github.com/unikyri/escritorio-remoto-backend/internal/infrastructure/database"
 	"github.com/unikyri/escritorio-remoto-backend/internal/infrastructure/persistence/mysql"
 	"github.com/unikyri/escritorio-remoto-backend/internal/presentation/handlers"
@@ -48,16 +47,6 @@ func main() {
 	authService := userservice.NewAuthService(userRepository, jwtSecret)
 	pcService := pcservice.NewPCService(clientPCRepository, clientPCFactory)
 
-	authHandler := handlers.NewAuthHandler(authService)
-	adminWSHandler := handlers.NewAdminWebSocketHandler(authService)
-	webSocketHandler := handlers.NewWebSocketHandler(authService, pcService, adminWSHandler)
-	pcHandler := handlers.NewPCHandler(pcService, authService)
-
-	// Inicializar WebSocket Hub para comunicación con clientes
-	websocketHub := websocket.NewHub()
-	go websocketHub.Run() // Ejecutar el hub en una goroutine separada
-	log.Println("WebSocket Hub iniciado")
-
 	// Inicializar dependencias para sesiones remotas
 	eventBus := events.NewSimpleEventBus()
 	remoteSessionRepository := mysql.NewRemoteSessionRepository(db)
@@ -68,8 +57,34 @@ func main() {
 		eventBus,
 	)
 
-	// Crear handler de control remoto con WebSocket hub
-	remoteControlHandler := httpHandlers.NewRemoteControlHandler(remoteSessionService, websocketHub)
+	// Crear handlers con las dependencias correctas
+	authHandler := handlers.NewAuthHandler(authService)
+	adminWSHandler := handlers.NewAdminWebSocketHandler(authService, remoteSessionService)
+	webSocketHandler := handlers.NewWebSocketHandler(authService, pcService, remoteSessionService, adminWSHandler)
+
+	// Establecer referencia circular entre handlers
+	adminWSHandler.SetClientWSHandler(webSocketHandler)
+
+	// Configurar callback para notificar sesiones terminadas
+	remoteSessionService.SetSessionEndedNotifier(func(sessionID, clientPCID, adminUserID string) {
+		err := adminWSHandler.NotifySessionEnded(sessionID, clientPCID, adminUserID)
+		if err != nil {
+			log.Printf("Error notifying session ended: %v", err)
+		}
+	})
+
+	// Configurar notificación al cliente cuando termina la sesión
+	remoteSessionService.SetClientSessionEndedNotifier(func(sessionID, clientPCID string) {
+		err := webSocketHandler.SendSessionEndedToClient(sessionID, clientPCID)
+		if err != nil {
+			log.Printf("Error notifying client session ended: %v", err)
+		}
+	})
+
+	pcHandler := handlers.NewPCHandler(pcService, authService)
+
+	// Crear handler de control remoto con WebSocket handler (no el hub separado)
+	remoteControlHandler := httpHandlers.NewRemoteControlHandler(remoteSessionService, webSocketHandler)
 
 	router := gin.Default()
 
@@ -96,6 +111,7 @@ func main() {
 		// Rutas para sesiones de control remoto
 		admin.POST("/sessions/initiate", remoteControlHandler.InitiateSession)
 		admin.GET("/sessions/:sessionId/status", remoteControlHandler.GetSessionStatus)
+		admin.POST("/sessions/:sessionId/end", remoteControlHandler.EndSession)
 		admin.GET("/sessions/active", remoteControlHandler.GetActiveSessions)
 		admin.GET("/sessions/my", remoteControlHandler.GetUserSessions)
 	}

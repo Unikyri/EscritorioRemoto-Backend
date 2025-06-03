@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net"
 	"net/http"
@@ -12,6 +13,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 	"github.com/unikyri/escritorio-remoto-backend/internal/application/pcservice"
+	"github.com/unikyri/escritorio-remoto-backend/internal/application/remotesessionservice"
 	"github.com/unikyri/escritorio-remoto-backend/internal/application/userservice"
 	"github.com/unikyri/escritorio-remoto-backend/internal/domain/clientpc"
 	"github.com/unikyri/escritorio-remoto-backend/internal/presentation/dto"
@@ -42,6 +44,7 @@ type ClientConnection struct {
 type WebSocketHandler struct {
 	authService    *userservice.AuthService
 	pcService      pcservice.IPCService
+	sessionService *remotesessionservice.RemoteSessionService
 	adminWSHandler *AdminWebSocketHandler
 	connections    map[string]*ClientConnection // map[connectionID]*ClientConnection
 	pcConnections  map[string]*ClientConnection // map[pcID]*ClientConnection
@@ -49,10 +52,16 @@ type WebSocketHandler struct {
 }
 
 // NewWebSocketHandler creates a new WebSocket handler
-func NewWebSocketHandler(authService *userservice.AuthService, pcService pcservice.IPCService, adminWSHandler *AdminWebSocketHandler) *WebSocketHandler {
+func NewWebSocketHandler(
+	authService *userservice.AuthService,
+	pcService pcservice.IPCService,
+	sessionService *remotesessionservice.RemoteSessionService,
+	adminWSHandler *AdminWebSocketHandler,
+) *WebSocketHandler {
 	return &WebSocketHandler{
 		authService:    authService,
 		pcService:      pcService,
+		sessionService: sessionService,
 		adminWSHandler: adminWSHandler,
 		connections:    make(map[string]*ClientConnection),
 		pcConnections:  make(map[string]*ClientConnection),
@@ -93,21 +102,30 @@ func (h *WebSocketHandler) HandleWebSocket(c *gin.Context) {
 		delete(h.connections, connectionID)
 		if clientConn.PCID != "" {
 			delete(h.pcConnections, clientConn.PCID)
+
+			// 🔄 Intentar finalizar/rechazar sesiones activas/pendientes para este PC
+			log.Printf("⚡ Calling HandleClientPCDisconnect for PCID: %s", clientConn.PCID)
+			if err := h.sessionService.HandleClientPCDisconnect(clientConn.PCID); err != nil {
+				// Loguear el error, pero no hacer que la desconexión falle por esto.
+				// El servicio HandleClientPCDisconnect ya loguea sus propios errores críticos.
+				log.Printf("⚠️ Error calling HandleClientPCDisconnect for PC %s: %v", clientConn.PCID, err)
+			}
+
 			// Marcar PC como offline cuando se cierra la conexión
 			if clientConn.IsAuth {
 				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 				defer cancel()
-				
+
 				// Obtener información del PC antes de marcarlo como offline
 				currentPC, err := h.pcService.GetPCByID(ctx, clientConn.PCID)
 				var pcIdentifier string
 				if err == nil && currentPC != nil {
 					pcIdentifier = currentPC.Identifier
 				}
-				
+
 				// Obtener estado anterior del PC para notificación
 				oldStatus := "ONLINE"
-				
+
 				err = h.pcService.UpdatePCConnectionStatus(ctx, clientConn.PCID, clientpc.PCConnectionStatusOffline)
 				if err != nil {
 					log.Printf("Error updating PC status to offline: %v", err)
@@ -153,6 +171,12 @@ func (h *WebSocketHandler) HandleWebSocket(c *gin.Context) {
 			h.handlePCRegistration(conn, clientConn, message.Data, clientIP)
 		case dto.MessageTypeHeartbeat:
 			h.handleHeartbeat(conn, clientConn, message.Data)
+		case dto.MessageTypeScreenFrame:
+			h.handleScreenFrame(conn, clientConn, message.Data)
+		case "session_accepted":
+			h.handleSessionAccepted(conn, clientConn, message.Data)
+		case "session_rejected":
+			h.handleSessionRejected(conn, clientConn, message.Data)
 		default:
 			log.Printf("Unknown message type: %s", message.Type)
 		}
@@ -240,12 +264,12 @@ func (h *WebSocketHandler) handlePCRegistration(conn *websocket.Conn, clientConn
 	// Notificar a administradores sobre el registro del PC
 	if h.adminWSHandler != nil {
 		h.adminWSHandler.BroadcastPCRegistered(pc.PCID, pc.Identifier, pc.OwnerUserID, pc.IP)
-		
+
 		// También notificar que el PC está ahora ONLINE ya que se acaba de conectar
 		log.Printf("PC registered and online: %s (%s) for user %s", pc.Identifier, pc.PCID, clientConn.Username)
 		h.adminWSHandler.BroadcastPCConnected(pc.PCID, pc.Identifier, pc.OwnerUserID, pc.IP)
 		h.adminWSHandler.BroadcastPCStatusChanged(pc.PCID, pc.Identifier, "OFFLINE", "ONLINE")
-		
+
 		// Notificar actualización general de la lista
 		h.adminWSHandler.BroadcastPCListUpdate()
 	}
@@ -292,7 +316,7 @@ func (h *WebSocketHandler) handleHeartbeat(conn *websocket.Conn, clientConn *Cli
 			// Si el PC estaba offline y ahora está online, notificar el cambio
 			if wasOffline && h.adminWSHandler != nil {
 				log.Printf("PC reconnected: %s (%s)", clientConn.PCID, clientConn.Username)
-				
+
 				// Obtener información actualizada del PC para las notificaciones
 				updatedPC, err := h.pcService.GetPCByID(ctx, clientConn.PCID)
 				if err == nil && updatedPC != nil {
@@ -317,6 +341,154 @@ func (h *WebSocketHandler) handleHeartbeat(conn *websocket.Conn, clientConn *Cli
 	}
 
 	conn.WriteJSON(response)
+}
+
+// handleScreenFrame maneja frames de pantalla recibidos de clientes
+func (h *WebSocketHandler) handleScreenFrame(conn *websocket.Conn, clientConn *ClientConnection, data interface{}) {
+	if !clientConn.IsAuth {
+		log.Printf("❌ SCREEN FRAME: Unauthorized client attempted to send frame")
+		return
+	}
+
+	if clientConn.PCID == "" {
+		log.Printf("❌ SCREEN FRAME: Client not registered, cannot process frame")
+		return
+	}
+
+	// Parse screen frame data
+	frameData, err := json.Marshal(data)
+	if err != nil {
+		log.Printf("❌ SCREEN FRAME: Error marshalling frame data: %v", err)
+		return
+	}
+
+	var screenFrame dto.ScreenFrame
+	if err := json.Unmarshal(frameData, &screenFrame); err != nil {
+		log.Printf("❌ SCREEN FRAME: Error unmarshalling screen frame: %v", err)
+		return
+	}
+
+	log.Printf("📹 SCREEN FRAME: Received frame %d from PC %s (session: %s, size: %dx%d)",
+		screenFrame.SequenceNum, clientConn.PCID, screenFrame.SessionID, screenFrame.Width, screenFrame.Height)
+
+	// Validar que la sesión está activa y el PC tiene permisos
+	err = h.sessionService.ValidateStreamingPermission(screenFrame.SessionID, clientConn.PCID)
+	if err != nil {
+		log.Printf("❌ SCREEN FRAME: Invalid streaming permission: %v", err)
+		return
+	}
+
+	// Obtener el administrador que está controlando esta sesión
+	adminUserID, err := h.sessionService.GetAdminUserIDForActiveSession(screenFrame.SessionID)
+	if err != nil {
+		log.Printf("❌ SCREEN FRAME: Error getting admin for session: %v", err)
+		return
+	}
+
+	// Reenviar frame al administrador a través del AdminWebSocketHandler
+	if h.adminWSHandler != nil {
+		err := h.adminWSHandler.ForwardScreenFrameToAdmin(adminUserID, screenFrame)
+		if err != nil {
+			log.Printf("❌ SCREEN FRAME: Error forwarding frame to admin %s: %v", adminUserID, err)
+		} else {
+			log.Printf("✅ SCREEN FRAME: Frame %d forwarded to admin %s", screenFrame.SequenceNum, adminUserID)
+		}
+	} else {
+		log.Printf("⚠️ SCREEN FRAME: No admin WebSocket handler available")
+	}
+}
+
+// handleSessionAccepted maneja cuando el cliente acepta una sesión de control remoto
+func (h *WebSocketHandler) handleSessionAccepted(conn *websocket.Conn, clientConn *ClientConnection, data interface{}) {
+	// Parse session accepted message
+	sessionData, err := json.Marshal(data)
+	if err != nil {
+		log.Printf("Error marshalling session accepted data: %v", err)
+		return
+	}
+
+	var acceptedMsg struct {
+		SessionID string `json:"session_id"`
+	}
+	if err := json.Unmarshal(sessionData, &acceptedMsg); err != nil {
+		log.Printf("Error unmarshalling session accepted message: %v", err)
+		return
+	}
+
+	log.Printf("🎉 Client %s accepted remote control session: %s", clientConn.PCID, acceptedMsg.SessionID)
+
+	// Actualizar estado de sesión en base de datos a ACTIVE
+	err = h.sessionService.AcceptSession(acceptedMsg.SessionID)
+	if err != nil {
+		log.Printf("❌ Error accepting session in service: %v", err)
+
+		// Enviar error al cliente
+		errorMsg := dto.WebSocketMessage{
+			Type: "session_failed",
+			Data: map[string]interface{}{
+				"session_id": acceptedMsg.SessionID,
+				"error":      "Failed to activate session",
+				"message":    err.Error(),
+			},
+		}
+		conn.WriteJSON(errorMsg)
+		return
+	}
+
+	log.Printf("✅ Session %s successfully activated in database", acceptedMsg.SessionID)
+
+	// Notificar al administrador que la sesión fue aceptada
+	if h.adminWSHandler != nil {
+		err = h.adminWSHandler.NotifySessionAccepted(acceptedMsg.SessionID)
+		if err != nil {
+			log.Printf("⚠️ Warning: Failed to notify admin of session acceptance: %v", err)
+		} else {
+			log.Printf("✅ Admin notified of session %s acceptance", acceptedMsg.SessionID)
+		}
+	}
+
+	// Enviar confirmación de sesión iniciada al cliente
+	sessionStartedMsg := dto.WebSocketMessage{
+		Type: "session_started",
+		Data: map[string]interface{}{
+			"session_id": acceptedMsg.SessionID,
+			"status":     "ACTIVE",
+			"message":    "Remote control session started successfully",
+			"timestamp":  time.Now().Unix(),
+		},
+	}
+
+	err = conn.WriteJSON(sessionStartedMsg)
+	if err != nil {
+		log.Printf("Error sending session started message to client: %v", err)
+	} else {
+		log.Printf("✅ Session started confirmation sent to client %s", clientConn.PCID)
+	}
+}
+
+// handleSessionRejected maneja cuando el cliente rechaza una sesión de control remoto
+func (h *WebSocketHandler) handleSessionRejected(conn *websocket.Conn, clientConn *ClientConnection, data interface{}) {
+	// Parse session rejected message
+	sessionData, err := json.Marshal(data)
+	if err != nil {
+		log.Printf("Error marshalling session rejected data: %v", err)
+		return
+	}
+
+	var rejectedMsg struct {
+		SessionID string `json:"session_id"`
+		Reason    string `json:"reason"`
+	}
+	if err := json.Unmarshal(sessionData, &rejectedMsg); err != nil {
+		log.Printf("Error unmarshalling session rejected message: %v", err)
+		return
+	}
+
+	log.Printf("❌ Client %s rejected remote control session: %s (reason: %s)",
+		clientConn.PCID, rejectedMsg.SessionID, rejectedMsg.Reason)
+
+	// TODO: Actualizar estado de sesión en base de datos a ENDED_BY_CLIENT
+	// TODO: Notificar al administrador que la sesión fue rechazada
 }
 
 // Helper methods for sending responses
@@ -390,4 +562,121 @@ func randomString(length int) string {
 		b[i] = charset[time.Now().UnixNano()%int64(len(charset))]
 	}
 	return string(b)
+}
+
+// SendRemoteControlRequestToClient envía una solicitud de control remoto a un cliente específico
+func (h *WebSocketHandler) SendRemoteControlRequestToClient(sessionID, clientPCID, adminUserID, adminUsername string) error {
+	log.Printf("🚀 REMOTE CONTROL: Attempting to send request to client PC: %s", clientPCID)
+
+	h.mutex.RLock()
+	clientConn, exists := h.pcConnections[clientPCID]
+	h.mutex.RUnlock()
+
+	if !exists {
+		log.Printf("❌ REMOTE CONTROL: Client PC %s not found in connections map", clientPCID)
+		log.Printf("📊 REMOTE CONTROL: Current connected PCs: %d", len(h.pcConnections))
+		for pcID := range h.pcConnections {
+			log.Printf("  - Connected PC: %s", pcID)
+		}
+		return fmt.Errorf("client PC %s not connected", clientPCID)
+	}
+
+	log.Printf("✅ REMOTE CONTROL: Found client connection for PC: %s", clientPCID)
+
+	// Crear mensaje de solicitud de control remoto
+	remoteControlMsg := dto.WebSocketMessage{
+		Type: "remote_control_request",
+		Data: map[string]interface{}{
+			"session_id":     sessionID,
+			"admin_user_id":  adminUserID,
+			"admin_username": adminUsername,
+			"client_pc_id":   clientPCID,
+			"timestamp":      time.Now().Unix(),
+		},
+	}
+
+	log.Printf("📡 REMOTE CONTROL: Sending message to client %s: %+v", clientPCID, remoteControlMsg)
+
+	// Enviar mensaje al cliente
+	err := clientConn.Conn.WriteJSON(remoteControlMsg)
+	if err != nil {
+		log.Printf("❌ REMOTE CONTROL: Error sending to client %s: %v", clientPCID, err)
+		return err
+	}
+
+	log.Printf("✅ REMOTE CONTROL: Request sent successfully to client %s (session: %s)", clientPCID, sessionID)
+	return nil
+}
+
+// SendInputCommandToClient envía un comando de input a un cliente específico
+func (h *WebSocketHandler) SendInputCommandToClient(clientPCID string, inputCommand dto.InputCommand) error {
+	log.Printf("🖱️ REMOTE CONTROL: Attempting to send input command to client PC: %s", clientPCID)
+
+	h.mutex.RLock()
+	clientConn, exists := h.pcConnections[clientPCID]
+	h.mutex.RUnlock()
+
+	if !exists {
+		log.Printf("❌ INPUT COMMAND: Client PC %s not found in connections map", clientPCID)
+		return fmt.Errorf("client PC %s not connected", clientPCID)
+	}
+
+	log.Printf("✅ INPUT COMMAND: Found client connection for PC: %s", clientPCID)
+
+	// Crear mensaje de comando de input
+	inputMsg := dto.WebSocketMessage{
+		Type: "input_command",
+		Data: inputCommand,
+	}
+
+	log.Printf("📡 INPUT COMMAND: Sending to client %s: %+v", clientPCID, inputMsg)
+
+	// Enviar mensaje al cliente
+	err := clientConn.Conn.WriteJSON(inputMsg)
+	if err != nil {
+		log.Printf("❌ INPUT COMMAND: Error sending to client %s: %v", clientPCID, err)
+		return err
+	}
+
+	log.Printf("✅ INPUT COMMAND: Sent successfully to client %s", clientPCID)
+	return nil
+}
+
+// SendSessionEndedToClient notifica al cliente que una sesión ha terminado
+func (h *WebSocketHandler) SendSessionEndedToClient(sessionID, clientPCID string) error {
+	log.Printf("🔚 SESSION END: Attempting to send session ended notification to client PC: %s", clientPCID)
+
+	h.mutex.RLock()
+	clientConn, exists := h.pcConnections[clientPCID]
+	h.mutex.RUnlock()
+
+	if !exists {
+		log.Printf("⚠️ SESSION END: Client PC %s not found in connections map", clientPCID)
+		return nil // No es un error crítico si el cliente no está conectado
+	}
+
+	log.Printf("✅ SESSION END: Found client connection for PC: %s", clientPCID)
+
+	// Crear mensaje de sesión terminada
+	sessionEndedMsg := dto.WebSocketMessage{
+		Type: "control_session_ended",
+		Data: map[string]interface{}{
+			"session_id": sessionID,
+			"reason":     "ended_by_admin",
+			"message":    "Remote control session ended by administrator",
+			"timestamp":  time.Now().Unix(),
+		},
+	}
+
+	log.Printf("📡 SESSION END: Sending to client %s: %+v", clientPCID, sessionEndedMsg)
+
+	// Enviar mensaje al cliente
+	err := clientConn.Conn.WriteJSON(sessionEndedMsg)
+	if err != nil {
+		log.Printf("❌ SESSION END: Error sending to client %s: %v", clientPCID, err)
+		return err
+	}
+
+	log.Printf("✅ SESSION END: Notification sent successfully to client %s", clientPCID)
+	return nil
 }

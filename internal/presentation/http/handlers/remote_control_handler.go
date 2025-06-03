@@ -1,30 +1,30 @@
 package handlers
 
 import (
-	"context"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
 	"github.com/unikyri/escritorio-remoto-backend/internal/application/remotesessionservice"
-	"github.com/unikyri/escritorio-remoto-backend/internal/infrastructure/comms/websocket"
+	"github.com/unikyri/escritorio-remoto-backend/internal/domain/remotesession"
+	"github.com/unikyri/escritorio-remoto-backend/internal/presentation/handlers"
 	"github.com/unikyri/escritorio-remoto-backend/internal/presentation/http/dto"
 	"github.com/unikyri/escritorio-remoto-backend/internal/presentation/middleware"
 )
 
 // RemoteControlHandler maneja las operaciones de control remoto
 type RemoteControlHandler struct {
-	sessionService  *remotesessionservice.RemoteSessionService
-	websocketHub    *websocket.Hub
+	sessionService   *remotesessionservice.RemoteSessionService
+	webSocketHandler *handlers.WebSocketHandler
 }
 
 // NewRemoteControlHandler crea una nueva instancia del handler
 func NewRemoteControlHandler(
 	sessionService *remotesessionservice.RemoteSessionService,
-	websocketHub *websocket.Hub,
+	webSocketHandler *handlers.WebSocketHandler,
 ) *RemoteControlHandler {
 	return &RemoteControlHandler{
-		sessionService: sessionService,
-		websocketHub:   websocketHub,
+		sessionService:   sessionService,
+		webSocketHandler: webSocketHandler,
 	}
 }
 
@@ -123,14 +123,14 @@ func (rch *RemoteControlHandler) GetSessionStatus(c *gin.Context) {
 
 	// Crear response DTO
 	response := dto.SessionStatusResponse{
-		SessionID:    session.SessionID(),
-		AdminUserID:  session.AdminUserID(),
-		ClientPCID:   session.ClientPCID(),
-		Status:       string(session.Status()),
-		StartTime:    session.StartTime(),
-		EndTime:      session.EndTime(),
-		CreatedAt:    session.CreatedAt(),
-		UpdatedAt:    session.UpdatedAt(),
+		SessionID:   session.SessionID(),
+		AdminUserID: session.AdminUserID(),
+		ClientPCID:  session.ClientPCID(),
+		Status:      string(session.Status()),
+		StartTime:   session.StartTime(),
+		EndTime:     session.EndTime(),
+		CreatedAt:   session.CreatedAt(),
+		UpdatedAt:   session.UpdatedAt(),
 	}
 
 	if session.GetDuration() > 0 {
@@ -218,11 +218,81 @@ func (rch *RemoteControlHandler) GetUserSessions(c *gin.Context) {
 	c.JSON(http.StatusOK, response)
 }
 
+// EndSession maneja POST /api/admin/sessions/:sessionId/end
+func (rch *RemoteControlHandler) EndSession(c *gin.Context) {
+	sessionID := c.Param("sessionId")
+	if sessionID == "" {
+		c.JSON(http.StatusBadRequest, dto.ErrorResponse{
+			Error:   "invalid_session_id",
+			Message: "Session ID is required",
+		})
+		return
+	}
+
+	// Obtener ID del usuario desde JWT
+	adminUserID, exists := c.Get(middleware.UserIDKey)
+	if !exists {
+		c.JSON(http.StatusUnauthorized, dto.ErrorResponse{
+			Error:   "unauthorized",
+			Message: "User not authenticated",
+		})
+		return
+	}
+
+	// Verificar que la sesión existe y pertenece al administrador
+	session, err := rch.sessionService.GetSessionById(sessionID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, dto.ErrorResponse{
+			Error:   "session_retrieval_failed",
+			Message: err.Error(),
+		})
+		return
+	}
+
+	if session == nil {
+		c.JSON(http.StatusNotFound, dto.ErrorResponse{
+			Error:   "session_not_found",
+			Message: "Session not found",
+		})
+		return
+	}
+
+	// Verificar permisos - solo el administrador que inició la sesión puede terminarla
+	if session.AdminUserID() != adminUserID.(string) {
+		c.JSON(http.StatusForbidden, dto.ErrorResponse{
+			Error:   "insufficient_permissions",
+			Message: "You can only end your own sessions",
+		})
+		return
+	}
+
+	// Verificar que la sesión está activa
+	if session.Status() != remotesession.StatusActive {
+		c.JSON(http.StatusBadRequest, dto.ErrorResponse{
+			Error:   "invalid_session_state",
+			Message: "Session is not active",
+		})
+		return
+	}
+
+	// Finalizar la sesión
+	err = rch.sessionService.EndSessionByAdmin(sessionID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, dto.ErrorResponse{
+			Error:   "session_end_failed",
+			Message: err.Error(),
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": "Session ended successfully",
+	})
+}
+
 // sendRemoteControlRequestToClient envía una solicitud de control remoto al cliente vía WebSocket
 func (rch *RemoteControlHandler) sendRemoteControlRequestToClient(sessionID, clientPCID, adminUserID string) error {
-	// Crear mensaje WebSocket usando el factory method
-	message := websocket.NewRemoteControlRequestMessage(sessionID, adminUserID, clientPCID, "")
-
-	// Enviar a través del hub WebSocket
-	return rch.websocketHub.SendToClient(context.Background(), clientPCID, message)
-} 
+	// Crear mensaje WebSocket usando el WebSocketHandler
+	return rch.webSocketHandler.SendRemoteControlRequestToClient(sessionID, clientPCID, adminUserID, "")
+}
