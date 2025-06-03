@@ -5,6 +5,7 @@ import (
 	"os"
 
 	"github.com/gin-gonic/gin"
+	"github.com/unikyri/escritorio-remoto-backend/internal/application/actionlogservice"
 	"github.com/unikyri/escritorio-remoto-backend/internal/application/pcservice"
 	"github.com/unikyri/escritorio-remoto-backend/internal/application/remotesessionservice"
 	"github.com/unikyri/escritorio-remoto-backend/internal/application/userservice"
@@ -43,6 +44,10 @@ func main() {
 	clientPCRepository := database.NewMySQLClientPCRepository(db)
 	clientPCFactory := clientpc.NewClientPCFactory()
 
+	// Crear repositorio y servicio de ActionLog
+	actionLogRepository := mysql.NewActionLogRepository(db)
+	actionLogService := actionlogservice.NewActionLogService(actionLogRepository)
+
 	jwtSecret := getEnv("JWT_SECRET", "escritorio_remoto_jwt_secret_development_2025")
 	authService := userservice.NewAuthService(userRepository, jwtSecret)
 	pcService := pcservice.NewPCService(clientPCRepository, clientPCFactory)
@@ -54,6 +59,7 @@ func main() {
 		remoteSessionRepository,
 		userRepository,
 		clientPCRepository,
+		actionLogService,
 		eventBus,
 	)
 

@@ -6,6 +6,7 @@ import (
 	"log"
 	"time"
 
+	"github.com/unikyri/escritorio-remoto-backend/internal/application/actionlogservice"
 	"github.com/unikyri/escritorio-remoto-backend/internal/application/interfaces"
 	events "github.com/unikyri/escritorio-remoto-backend/internal/domain/events"
 	"github.com/unikyri/escritorio-remoto-backend/internal/domain/remotesession"
@@ -13,10 +14,11 @@ import (
 
 // RemoteSessionService servicio de aplicación para sesiones remotas
 type RemoteSessionService struct {
-	sessionRepo interfaces.IRemoteSessionRepository
-	userRepo    interfaces.IUserRepository
-	pcRepo      interfaces.IClientPCRepository
-	eventBus    events.IEventBus
+	sessionRepo      interfaces.IRemoteSessionRepository
+	userRepo         interfaces.IUserRepository
+	pcRepo           interfaces.IClientPCRepository
+	actionLogService actionlogservice.IActionLogService
+	eventBus         events.IEventBus
 
 	// Callback para notificar al AdminWebSocketHandler
 	notifySessionEndedCallback func(sessionID, clientPCID, adminUserID string)
@@ -29,13 +31,15 @@ func NewRemoteSessionService(
 	sessionRepo interfaces.IRemoteSessionRepository,
 	userRepo interfaces.IUserRepository,
 	pcRepo interfaces.IClientPCRepository,
+	actionLogService actionlogservice.IActionLogService,
 	eventBus events.IEventBus,
 ) *RemoteSessionService {
 	return &RemoteSessionService{
-		sessionRepo: sessionRepo,
-		userRepo:    userRepo,
-		pcRepo:      pcRepo,
-		eventBus:    eventBus,
+		sessionRepo:      sessionRepo,
+		userRepo:         userRepo,
+		pcRepo:           pcRepo,
+		actionLogService: actionLogService,
+		eventBus:         eventBus,
 	}
 }
 
@@ -514,6 +518,10 @@ func (rss *RemoteSessionService) EndSessionByAdmin(sessionID string) error {
 		return fmt.Errorf("session is not active")
 	}
 
+	// Guardar datos antes de finalizar para el log
+	adminUserID := session.AdminUserID()
+	clientPCID := session.ClientPCID()
+
 	// Finalizar sesión usando el método de dominio
 	err = session.End(remotesession.StatusEndedByAdmin)
 	if err != nil {
@@ -526,18 +534,28 @@ func (rss *RemoteSessionService) EndSessionByAdmin(sessionID string) error {
 		return fmt.Errorf("error updating session status: %w", err)
 	}
 
+	// 📝 REGISTRAR LOG DE AUDITORÍA
+	ctx := context.Background()
+	err = rss.actionLogService.LogSessionEnded(ctx, sessionID, adminUserID, "ended_by_admin")
+	if err != nil {
+		// Log error pero no falle la operación principal
+		log.Printf("⚠️ Warning: Failed to log session ended audit entry: %v", err)
+	} else {
+		log.Printf("📝 Audit log registered: Session %s ended by admin %s", sessionID, adminUserID)
+	}
+
 	// Notificar al AdminWeb que la sesión terminó
 	if rss.notifySessionEndedCallback != nil {
 		log.Printf("📡 Notifying AdminWeb that session %s ended by admin", sessionID)
-		rss.notifySessionEndedCallback(sessionID, session.ClientPCID(), session.AdminUserID())
+		rss.notifySessionEndedCallback(sessionID, clientPCID, adminUserID)
 	}
 
 	// Notificar al cliente que la sesión terminó
 	if rss.notifyClientSessionEndedCallback != nil {
-		log.Printf("📱 Notifying client %s that session %s ended by admin", session.ClientPCID(), sessionID)
-		rss.notifyClientSessionEndedCallback(sessionID, session.ClientPCID())
+		log.Printf("📱 Notifying client %s that session %s ended by admin", clientPCID, sessionID)
+		rss.notifyClientSessionEndedCallback(sessionID, clientPCID)
 	}
 
-	log.Printf("✅ Session %s ended by admin", sessionID)
+	log.Printf("✅ Session %s ended by admin %s", sessionID, adminUserID)
 	return nil
 }
