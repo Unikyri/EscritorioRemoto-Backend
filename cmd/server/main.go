@@ -6,6 +6,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/unikyri/escritorio-remoto-backend/internal/application/actionlogservice"
+	"github.com/unikyri/escritorio-remoto-backend/internal/application/filetransferservice"
 	"github.com/unikyri/escritorio-remoto-backend/internal/application/pcservice"
 	"github.com/unikyri/escritorio-remoto-backend/internal/application/remotesessionservice"
 	"github.com/unikyri/escritorio-remoto-backend/internal/application/userservice"
@@ -22,7 +23,7 @@ import (
 
 func main() {
 	log.Println("Escritorio Remoto - Backend Server")
-	log.Println("FASE 4 - PASO 1: Inicio, Aceptación/Rechazo de Sesión de Control Remoto")
+	log.Println("FASE 8 - PASO 1: Transferencia de Archivos (Servidor a Cliente)")
 
 	dbConfig := database.Config{
 		Host:               getEnv("DB_HOST", "localhost"),
@@ -74,10 +75,18 @@ func main() {
 		actionLogService,
 	)
 
+	// Inicializar dependencias para file transfer service
+	fileTransferRepository := mysql.NewFileTransferRepository(db)
+	fileTransferService := filetransferservice.NewFileTransferService(
+		fileTransferRepository,
+		actionLogRepository,
+		fileStorage,
+	)
+
 	// Crear handlers con las dependencias correctas
 	authHandler := handlers.NewAuthHandler(authService)
 	adminWSHandler := handlers.NewAdminWebSocketHandler(authService, remoteSessionService)
-	webSocketHandler := handlers.NewWebSocketHandler(authService, pcService, remoteSessionService, videoService, adminWSHandler)
+	webSocketHandler := handlers.NewWebSocketHandler(authService, pcService, remoteSessionService, videoService, fileTransferService, adminWSHandler)
 
 	// Establecer referencia circular entre handlers
 	adminWSHandler.SetClientWSHandler(webSocketHandler)
@@ -105,6 +114,9 @@ func main() {
 
 	// Crear handler de video para frames individuales
 	videoHandler := httpHandlers.NewVideoHandler(remoteSessionService, videoService, authService)
+
+	// Crear handler de transferencia de archivos
+	fileTransferHandler := httpHandlers.NewFileTransferHandler(fileTransferService, authService, fileStorage, webSocketHandler)
 
 	router := gin.Default()
 
@@ -138,10 +150,17 @@ func main() {
 		// Nuevas rutas para video frames individuales
 		admin.GET("/sessions/:sessionId/recording/metadata", videoHandler.GetRecordingMetadata)
 		admin.GET("/sessions/:sessionId/frames/:frameNumber", videoHandler.GetVideoFrame)
-		
+
 		// Rutas para grabaciones por cliente
 		admin.GET("/recordings", videoHandler.GetAllRecordings)
 		admin.GET("/clients/:clientId/recordings", videoHandler.GetClientRecordings)
+
+		// Rutas para transferencia de archivos
+		admin.POST("/sessions/:sessionId/files/send", fileTransferHandler.SendFile)
+		admin.GET("/sessions/:sessionId/files", fileTransferHandler.GetTransfersBySession)
+		admin.GET("/transfers/:transferId/status", fileTransferHandler.GetTransferStatus)
+		admin.GET("/transfers/pending", fileTransferHandler.GetPendingTransfers)
+		admin.GET("/clients/:clientId/transfers", fileTransferHandler.GetTransfersByClient)
 	}
 
 	ws := router.Group("/ws")
@@ -203,6 +222,11 @@ func main() {
 	log.Printf("API Video Frames: http://localhost:%s/api/admin/sessions/:sessionId/frames/:frameNumber", port)
 	log.Printf("API Todas las Grabaciones: http://localhost:%s/api/admin/recordings", port)
 	log.Printf("API Grabaciones por Cliente: http://localhost:%s/api/admin/clients/:clientId/recordings", port)
+	log.Printf("API Enviar Archivo: http://localhost:%s/api/admin/sessions/:sessionId/files/send", port)
+	log.Printf("API Transferencias por Sesión: http://localhost:%s/api/admin/sessions/:sessionId/files", port)
+	log.Printf("API Estado de Transferencia: http://localhost:%s/api/admin/transfers/:transferId/status", port)
+	log.Printf("API Transferencias Pendientes: http://localhost:%s/api/admin/transfers/pending", port)
+	log.Printf("API Transferencias por Cliente: http://localhost:%s/api/admin/clients/:clientId/transfers", port)
 
 	if err := router.Run(":" + port); err != nil {
 		log.Fatalf("Error al iniciar el servidor: %v", err)

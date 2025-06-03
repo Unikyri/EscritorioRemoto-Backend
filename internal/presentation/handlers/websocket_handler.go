@@ -13,11 +13,13 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
+	"github.com/unikyri/escritorio-remoto-backend/internal/application/filetransferservice"
 	"github.com/unikyri/escritorio-remoto-backend/internal/application/pcservice"
 	"github.com/unikyri/escritorio-remoto-backend/internal/application/remotesessionservice"
 	"github.com/unikyri/escritorio-remoto-backend/internal/application/userservice"
 	"github.com/unikyri/escritorio-remoto-backend/internal/application/videoservice"
 	"github.com/unikyri/escritorio-remoto-backend/internal/domain/clientpc"
+	"github.com/unikyri/escritorio-remoto-backend/internal/domain/filetransfer"
 	"github.com/unikyri/escritorio-remoto-backend/internal/presentation/dto"
 )
 
@@ -44,14 +46,15 @@ type ClientConnection struct {
 
 // WebSocketHandler manages WebSocket connections for client PCs
 type WebSocketHandler struct {
-	authService    *userservice.AuthService
-	pcService      pcservice.IPCService
-	sessionService *remotesessionservice.RemoteSessionService
-	videoService   interface{} // VideoService interface
-	adminWSHandler *AdminWebSocketHandler
-	connections    map[string]*ClientConnection // map[connectionID]*ClientConnection
-	pcConnections  map[string]*ClientConnection // map[pcID]*ClientConnection
-	mutex          sync.RWMutex
+	authService         *userservice.AuthService
+	pcService           pcservice.IPCService
+	sessionService      *remotesessionservice.RemoteSessionService
+	videoService        interface{} // VideoService interface
+	fileTransferService *filetransferservice.FileTransferService
+	adminWSHandler      *AdminWebSocketHandler
+	connections         map[string]*ClientConnection // map[connectionID]*ClientConnection
+	pcConnections       map[string]*ClientConnection // map[pcID]*ClientConnection
+	mutex               sync.RWMutex
 }
 
 // NewWebSocketHandler creates a new WebSocket handler
@@ -60,17 +63,19 @@ func NewWebSocketHandler(
 	pcService pcservice.IPCService,
 	sessionService *remotesessionservice.RemoteSessionService,
 	videoService interface{}, // VideoService interface
+	fileTransferService *filetransferservice.FileTransferService,
 	adminWSHandler *AdminWebSocketHandler,
 ) *WebSocketHandler {
 	return &WebSocketHandler{
-		authService:    authService,
-		pcService:      pcService,
-		sessionService: sessionService,
-		videoService:   videoService,
-		adminWSHandler: adminWSHandler,
-		connections:    make(map[string]*ClientConnection),
-		pcConnections:  make(map[string]*ClientConnection),
-		mutex:          sync.RWMutex{},
+		authService:         authService,
+		pcService:           pcService,
+		sessionService:      sessionService,
+		videoService:        videoService,
+		fileTransferService: fileTransferService,
+		adminWSHandler:      adminWSHandler,
+		connections:         make(map[string]*ClientConnection),
+		pcConnections:       make(map[string]*ClientConnection),
+		mutex:               sync.RWMutex{},
 	}
 }
 
@@ -190,6 +195,8 @@ func (h *WebSocketHandler) HandleWebSocket(c *gin.Context) {
 			h.handleVideoFrameUpload(conn, clientConn, message.Data)
 		case "video_recording_complete":
 			h.handleVideoRecordingComplete(conn, clientConn, message.Data)
+		case "file_transfer_ack":
+			h.handleFileTransferAcknowledgement(conn, clientConn, message.Data)
 		default:
 			log.Printf("Unknown message type: %s", message.Type)
 		}
@@ -341,6 +348,10 @@ func (h *WebSocketHandler) handleHeartbeat(conn *websocket.Conn, clientConn *Cli
 					h.adminWSHandler.BroadcastPCListUpdate()
 				}
 			}
+
+			// Procesar transferencias pendientes para este cliente
+			log.Printf("🔍 Verificando transferencias pendientes para cliente: %s", clientConn.PCID)
+			h.processPendingTransfers(clientConn.PCID)
 		}
 	}
 
@@ -841,6 +852,95 @@ func (h *WebSocketHandler) handleVideoRecordingComplete(conn *websocket.Conn, cl
 	}
 }
 
+// handleFileTransferAcknowledgement handles file transfer acknowledgement messages
+func (h *WebSocketHandler) handleFileTransferAcknowledgement(conn *websocket.Conn, clientConn *ClientConnection, data interface{}) {
+	// Parse file transfer acknowledgement message
+	ackData, err := json.Marshal(data)
+	if err != nil {
+		log.Printf("Error marshalling file transfer acknowledgement data: %v", err)
+		return
+	}
+
+	var ackMsg dto.FileTransferAcknowledgement
+	if err := json.Unmarshal(ackData, &ackMsg); err != nil {
+		log.Printf("Error unmarshalling file transfer acknowledgement message: %v", err)
+		return
+	}
+
+	log.Printf("✅ FILE TRANSFER ACK: Received acknowledgement for transfer %s with status: %s",
+		ackMsg.TransferID, ackMsg.Status)
+
+	// Actualizar estado en base de datos según el tipo de acknowledgement
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	switch ackMsg.Status {
+	case "READY":
+		// Cliente está listo para recibir el archivo
+		log.Printf("📡 Client ready for transfer %s", ackMsg.TransferID)
+
+	case "CHUNK_RECEIVED":
+		// Cliente confirmó recepción de un chunk
+		log.Printf("📦 Chunk %d received by client for transfer %s", ackMsg.ChunkNumber, ackMsg.TransferID)
+
+	case "COMPLETED_CLIENT":
+		// Cliente confirmó que recibió todo el archivo exitosamente
+		err := h.fileTransferService.UpdateTransferStatus(
+			ctx,
+			ackMsg.TransferID,
+			filetransfer.TransferStatusCompleted,
+			"",
+		)
+		if err != nil {
+			log.Printf("Error updating transfer status to COMPLETED: %v", err)
+		} else {
+			log.Printf("🎉 Transfer %s completed successfully", ackMsg.TransferID)
+
+			// Notificar al administrador
+			if h.adminWSHandler != nil {
+				// Obtener detalles de la transferencia para la notificación
+				_, err := h.fileTransferService.GetTransferByID(ctx, ackMsg.TransferID)
+				if err == nil {
+					// TODO: Implementar BroadcastFileTransferCompleted en AdminWebSocketHandler
+					// h.adminWSHandler.BroadcastFileTransferCompleted(
+					// 	transfer.TransferID(),
+					// 	transfer.FileName(),
+					// 	transfer.TargetPCID(),
+					// )
+				}
+			}
+		}
+
+	case "FAILED_CLIENT":
+		// Cliente reportó error en la transferencia
+		errorMsg := ackMsg.ErrorMessage
+		if errorMsg == "" {
+			errorMsg = "Error reportado por el cliente"
+		}
+
+		err := h.fileTransferService.UpdateTransferStatus(
+			ctx,
+			ackMsg.TransferID,
+			filetransfer.TransferStatusFailed,
+			errorMsg,
+		)
+		if err != nil {
+			log.Printf("Error updating transfer status to FAILED: %v", err)
+		} else {
+			log.Printf("❌ Transfer %s failed: %s", ackMsg.TransferID, errorMsg)
+
+			// Notificar al administrador
+			if h.adminWSHandler != nil {
+				// TODO: Implementar BroadcastFileTransferFailed en AdminWebSocketHandler
+				// h.adminWSHandler.BroadcastFileTransferFailed(ackMsg.TransferID, errorMsg)
+			}
+		}
+
+	default:
+		log.Printf("⚠️ Unknown acknowledgement status: %s for transfer %s", ackMsg.Status, ackMsg.TransferID)
+	}
+}
+
 // Helper methods for sending responses
 
 func (h *WebSocketHandler) sendAuthResponse(conn *websocket.Conn, success bool, token, userID, errorMsg string) {
@@ -992,6 +1092,245 @@ func (h *WebSocketHandler) SendInputCommandToClient(clientPCID string, inputComm
 	return nil
 }
 
+// === FILE TRANSFER METHODS ===
+
+// SendFileTransferRequestToClient sends a file transfer request to the specified client PC
+func (h *WebSocketHandler) SendFileTransferRequestToClient(transfer *filetransfer.FileTransfer) error {
+	h.mutex.RLock()
+	clientConn, exists := h.pcConnections[transfer.TargetPCID()]
+	h.mutex.RUnlock()
+
+	if !exists {
+		// Cliente no está conectado, marcar transferencia como fallida
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		err := h.fileTransferService.UpdateTransferStatus(
+			ctx,
+			transfer.TransferID(),
+			filetransfer.TransferStatusFailed,
+			"Cliente no está conectado",
+		)
+		if err != nil {
+			log.Printf("Error updating transfer status for offline client: %v", err)
+		}
+
+		return fmt.Errorf("client PC not connected: %s", transfer.TargetPCID())
+	}
+
+	// Calcular total de chunks para el archivo
+	chunkSize := 64 * 1024                                                   // 64KB chunks
+	fileSize := int64(transfer.FileSizeMB() * 1024 * 1024)                   // Convertir MB a bytes
+	totalChunks := int((fileSize + int64(chunkSize) - 1) / int64(chunkSize)) // Redondear hacia arriba
+
+	// Crear mensaje de solicitud de transferencia con estructura actualizada
+	request := dto.FileTransferRequest{
+		Type:            "file_transfer_request",
+		TransferID:      transfer.TransferID(),
+		SessionID:       transfer.AssociatedSessionID(),
+		FileName:        transfer.FileName(),
+		FileSize:        fileSize,
+		FileSizeMB:      transfer.FileSizeMB(),
+		TotalChunks:     totalChunks,
+		DestinationPath: transfer.DestinationPathClient(),
+		InitiatedBy:     transfer.InitiatingUserID(),
+		Timestamp:       time.Now().Unix(), // Unix timestamp
+	}
+
+	message := dto.WebSocketMessage{
+		Type: "file_transfer_request",
+		Data: request,
+	}
+
+	if err := clientConn.Conn.WriteJSON(message); err != nil {
+		log.Printf("Error sending file transfer request to client PC %s: %v", transfer.TargetPCID(), err)
+
+		// Marcar transferencia como fallida
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		h.fileTransferService.UpdateTransferStatus(
+			ctx,
+			transfer.TransferID(),
+			filetransfer.TransferStatusFailed,
+			fmt.Sprintf("Error enviando solicitud: %v", err),
+		)
+
+		return err
+	}
+
+	log.Printf("✅ File transfer request sent to client PC: %s (Transfer: %s, File: %s, %d chunks)",
+		transfer.TargetPCID(), transfer.TransferID(), transfer.FileName(), totalChunks)
+	return nil
+}
+
+// SendFileChunksToClient sends file chunks to the client PC
+func (h *WebSocketHandler) SendFileChunksToClient(transfer *filetransfer.FileTransfer) error {
+	// Actualizar estado a IN_PROGRESS
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	err := h.fileTransferService.UpdateTransferStatus(
+		ctx,
+		transfer.TransferID(),
+		filetransfer.TransferStatusInProgress,
+		"",
+	)
+	if err != nil {
+		log.Printf("Error updating transfer status to IN_PROGRESS: %v", err)
+	}
+
+	// Verificar que el cliente sigue conectado
+	h.mutex.RLock()
+	clientConn, exists := h.pcConnections[transfer.TargetPCID()]
+	h.mutex.RUnlock()
+
+	if !exists {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		err := h.fileTransferService.UpdateTransferStatus(
+			ctx,
+			transfer.TransferID(),
+			filetransfer.TransferStatusFailed,
+			"Cliente se desconectó durante la transferencia",
+		)
+		if err != nil {
+			log.Printf("Error updating transfer status for disconnected client: %v", err)
+		}
+
+		return fmt.Errorf("client PC disconnected during transfer: %s", transfer.TargetPCID())
+	}
+
+	// Calcular total de chunks
+	chunkSize := 64 * 1024 // 64KB chunks
+	fileSize := int64(transfer.FileSizeMB() * 1024 * 1024)
+	totalChunks := int((fileSize + int64(chunkSize) - 1) / int64(chunkSize))
+	chunkIndex := 0
+
+	// Leer archivo en chunks y enviar
+	err = h.fileTransferService.ReadFileInChunks(
+		transfer.SourcePathServer(),
+		chunkSize,
+		func(chunkData []byte, isLastChunk bool) error {
+			// Codificar chunk en base64
+			encodedData := base64.StdEncoding.EncodeToString(chunkData)
+
+			// Usar estructura actualizada
+			chunk := dto.FileChunk{
+				Type:          "file_chunk",
+				TransferID:    transfer.TransferID(),
+				SessionID:     transfer.AssociatedSessionID(),
+				ChunkIndex:    chunkIndex, // 0-based index
+				TotalChunks:   totalChunks,
+				ChunkData:     encodedData, // Base64 string directamente
+				IsLastChunk:   isLastChunk,
+				ChunkSize:     len(chunkData),
+				ChunkChecksum: "",                // TODO: implementar checksum MD5 si es necesario
+				Timestamp:     time.Now().Unix(), // Unix timestamp
+			}
+
+			message := dto.WebSocketMessage{
+				Type: "file_chunk",
+				Data: chunk,
+			}
+
+			// Verificar que el cliente sigue conectado antes de cada chunk
+			h.mutex.RLock()
+			_, exists := h.pcConnections[transfer.TargetPCID()]
+			h.mutex.RUnlock()
+
+			if !exists {
+				return fmt.Errorf("client disconnected during chunk transfer")
+			}
+
+			if err := clientConn.Conn.WriteJSON(message); err != nil {
+				return fmt.Errorf("error sending chunk %d: %w", chunkIndex, err)
+			}
+
+			log.Printf("📦 Chunk %d/%d sent for transfer %s (size: %d bytes, last: %v)",
+				chunkIndex+1, totalChunks, transfer.TransferID(), len(chunkData), isLastChunk)
+
+			chunkIndex++ // Incrementar índice para próximo chunk
+
+			// Pequeña pausa para no saturar la conexión
+			time.Sleep(10 * time.Millisecond)
+
+			return nil
+		},
+	)
+
+	if err != nil {
+		// Marcar transferencia como fallida
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		updateErr := h.fileTransferService.UpdateTransferStatus(
+			ctx,
+			transfer.TransferID(),
+			filetransfer.TransferStatusFailed,
+			fmt.Sprintf("Error enviando chunks: %v", err),
+		)
+		if updateErr != nil {
+			log.Printf("Error updating transfer status after chunk failure: %v", updateErr)
+		}
+
+		return fmt.Errorf("error sending file chunks: %w", err)
+	}
+
+	log.Printf("✅ All chunks sent successfully for transfer %s (%d chunks)",
+		transfer.TransferID(), totalChunks)
+
+	return nil
+}
+
+// ProcessFileTransfer processes a complete file transfer from start to finish
+func (h *WebSocketHandler) ProcessFileTransfer(transfer *filetransfer.FileTransfer) error {
+	log.Printf("🚀 Starting file transfer process: %s (File: %s, Target: %s)",
+		transfer.TransferID(), transfer.FileName(), transfer.TargetPCID())
+
+	// 1. Enviar solicitud de transferencia al cliente
+	if err := h.SendFileTransferRequestToClient(transfer); err != nil {
+		return fmt.Errorf("error sending transfer request: %w", err)
+	}
+
+	// 2. Por ahora, para MVP, asumir que el cliente está listo y enviar chunks inmediatamente
+	// En una implementación completa, esperaríamos una confirmación del cliente
+
+	// Pequeña pausa para que el cliente procese la solicitud
+	time.Sleep(100 * time.Millisecond)
+
+	// 3. Enviar chunks del archivo
+	if err := h.SendFileChunksToClient(transfer); err != nil {
+		return fmt.Errorf("error sending file chunks: %w", err)
+	}
+
+	// 4. Marcar como completada (en una implementación completa, esto se haría cuando el cliente confirme)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	err := h.fileTransferService.UpdateTransferStatus(
+		ctx,
+		transfer.TransferID(),
+		filetransfer.TransferStatusCompleted,
+		"",
+	)
+	if err != nil {
+		log.Printf("Error updating transfer status to COMPLETED: %v", err)
+		return fmt.Errorf("error marking transfer as completed: %w", err)
+	}
+
+	log.Printf("🎉 File transfer completed successfully: %s", transfer.TransferID())
+
+	// Notificar al administrador sobre la finalización exitosa
+	if h.adminWSHandler != nil {
+		// TODO: Implementar BroadcastFileTransferCompleted en AdminWebSocketHandler
+		// h.adminWSHandler.BroadcastFileTransferCompleted(transfer.TransferID(), transfer.FileName(), transfer.TargetPCID())
+	}
+
+	return nil
+}
+
 // SendSessionEndedToClient notifica al cliente que una sesión ha terminado
 func (h *WebSocketHandler) SendSessionEndedToClient(sessionID, clientPCID string) error {
 	log.Printf("🔚 SESSION END: Attempting to send session ended notification to client PC: %s", clientPCID)
@@ -1029,4 +1368,62 @@ func (h *WebSocketHandler) SendSessionEndedToClient(sessionID, clientPCID string
 
 	log.Printf("✅ SESSION END: Notification sent successfully to client %s", clientPCID)
 	return nil
+}
+
+// processPendingTransfers procesa transferencias pendientes para un cliente recién conectado
+func (h *WebSocketHandler) processPendingTransfers(clientPCID string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	log.Printf("🔍 PENDING TRANSFERS: Iniciando búsqueda para cliente %s", clientPCID)
+
+	// Obtener transferencias pendientes para este cliente
+	transfers, err := h.fileTransferService.GetTransfersByTargetPC(ctx, clientPCID)
+	if err != nil {
+		log.Printf("❌ PENDING TRANSFERS: Error getting transfers for client %s: %v", clientPCID, err)
+		return
+	}
+
+	log.Printf("📊 PENDING TRANSFERS: Encontradas %d transferencias totales para cliente %s", len(transfers), clientPCID)
+
+	pendingTransfers := make([]*filetransfer.FileTransfer, 0)
+	for i, transfer := range transfers {
+		log.Printf("  [%d] Transfer ID: %s, Status: %s, File: %s", i+1, transfer.TransferID(), transfer.Status(), transfer.FileName())
+		if transfer.Status() == filetransfer.TransferStatusPending {
+			pendingTransfers = append(pendingTransfers, transfer)
+		}
+	}
+
+	if len(pendingTransfers) > 0 {
+		log.Printf("📋 PENDING TRANSFERS: Cliente %s se conectó con %d transferencias pendientes", clientPCID, len(pendingTransfers))
+
+		// Procesar transferencias pendientes en una goroutine
+		go func() {
+			for i, transfer := range pendingTransfers {
+				log.Printf("🔄 PENDING TRANSFERS: [%d/%d] Procesando transferencia pendiente: %s -> %s",
+					i+1, len(pendingTransfers), transfer.FileName(), clientPCID)
+
+				// Enviar solicitud de transferencia
+				err := h.SendFileTransferRequestToClient(transfer)
+				if err != nil {
+					log.Printf("❌ PENDING TRANSFERS: Error sending transfer %s: %v", transfer.TransferID(), err)
+					continue
+				}
+
+				// Esperar un poco entre transferencias
+				time.Sleep(2 * time.Second)
+
+				// Enviar chunks del archivo
+				err = h.SendFileChunksToClient(transfer)
+				if err != nil {
+					log.Printf("❌ PENDING TRANSFERS: Error sending file chunks for transfer %s: %v", transfer.TransferID(), err)
+				} else {
+					log.Printf("✅ PENDING TRANSFERS: Transferencia %s procesada exitosamente", transfer.TransferID())
+				}
+			}
+			log.Printf("🎉 PENDING TRANSFERS: Completado procesamiento de transferencias pendientes para cliente %s", clientPCID)
+		}()
+	} else {
+		log.Printf("✅ PENDING TRANSFERS: No hay transferencias pendientes para cliente %s", clientPCID)
+	}
 }
